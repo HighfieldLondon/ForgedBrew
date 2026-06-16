@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sparkle auto-update configuration.
+	     SUFeedURL: where Sparkle fetches the appcast XML.
+	     SUPublicEDKey: the EdDSA public key printed by generate_keys.
+	     SUEnableAutomaticChecks: allow Sparkle to check on its own schedule. -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/rich986/ForgedBrew/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>8mZ7FBpPKjEphTljZve8Z1jDetuzvaWsGdJIKcXZDsE=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>

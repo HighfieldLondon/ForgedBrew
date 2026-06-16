@@ -1,0 +1,67 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Xcode — User-specific
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+*.xcscmblueprint
+*.xccheckout
+
+# Xcode — Build
+build/
+DerivedData/
+# Built app bundles (staged at repo root by the build script)
+*.app/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+Package.pins
+# Keep Package.resolved committed so contributors get the same dep versions:
+# (do NOT ignore ForgedBrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)
+
+# CocoaPods (not used, but in case)
+Pods/
+
+# Carthage (not used)
+Carthage/Build/
+
+# Fastlane (in case)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs
+*.log
+
+# ForgedBrew local
+forgedbrew-cache.sqlite
+*.db-wal
+*.db-shm
+
+# Agent/session working backups (not part of the build)
+.forgedbrew_backups/
+
+# Local-only session handoff notes (internal, never published)
+.handoffs_local/
+HANDOFF-*.md
+SPARKLE-RELEASE.md
+docs/ForgedBrew-GitHub-and-Gatekeeper-Guide.md
