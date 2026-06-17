@@ -130,7 +130,7 @@ app:
 ## Installing
 
 1. Download **ForgedBrew-2.3.1.dmg** from the
-   [latest release](https://github.com/rich986/ForgedBrew/releases/latest).
+   [latest release](https://github.com/HighfieldLondon/ForgedBrew/releases/latest).
 2. Open the DMG and drag **ForgedBrew** into your **Applications** folder.
 3. Double-click to launch.
 
