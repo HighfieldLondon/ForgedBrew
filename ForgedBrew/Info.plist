@@ -7,7 +7,7 @@
 	     SUPublicEDKey: the EdDSA public key printed by generate_keys.
 	     SUEnableAutomaticChecks: allow Sparkle to check on its own schedule. -->
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/rich986/ForgedBrew/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>8mZ7FBpPKjEphTljZve8Z1jDetuzvaWsGdJIKcXZDsE=</string>
 	<key>SUEnableAutomaticChecks</key>
