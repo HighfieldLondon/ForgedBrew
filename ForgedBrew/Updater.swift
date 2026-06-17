@@ -11,6 +11,23 @@ import SwiftUI
 //
 // Feed URL + public EdDSA key live in Info.plist (SUFeedURL / SUPublicEDKey);
 // automatic checks are controlled by SUEnableAutomaticChecks.
+
+// Dedicated Sparkle updater delegate.
+//
+// SPUUpdater's `delegate` is set once, at controller-init time (it is not an
+// assignable property afterward), so the delegate must be a separate object we
+// can hand to the initializer. Its only job is the pre-relaunch hook: it flips
+// StartupSettings.isInstallingUpdate so applicationShouldTerminate allows
+// Sparkle's quit through instead of cancelling it via the menu-bar keep-alive
+// rule (which is what was stalling the install).
+final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    nonisolated func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        DispatchQueue.main.async {
+            StartupSettings.shared.isInstallingUpdate = true
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class Updater {
@@ -19,6 +36,9 @@ final class Updater {
     // scheduled-check cycle immediately on launch.
     private let controller: SPUStandardUpdaterController
 
+    // Held strongly because SPUUpdater keeps only a weak reference to its delegate.
+    private let updaterDelegate = UpdaterDelegate()
+
     // Mirrors updater.canCheckForUpdates so a menu item can enable/disable
     // itself. Kept in sync via KVO on the underlying SPUUpdater.
     var canCheckForUpdates: Bool = false
@@ -26,9 +46,11 @@ final class Updater {
     private var observation: NSKeyValueObservation?
 
     init() {
+        // Pass our delegate in at init time so we receive Sparkle's pre-relaunch
+        // callback. startingUpdater: true begins the scheduled-check cycle now.
         controller = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: updaterDelegate,
             userDriverDelegate: nil
         )
 

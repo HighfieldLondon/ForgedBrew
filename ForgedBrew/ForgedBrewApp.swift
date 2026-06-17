@@ -898,8 +898,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // — CANCEL termination and just hide all windows, so the menu bar icon stays
     // and "Open ForgedBrew" brings the window back.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let (userQuit, liveInMenuBar) = MainActor.assumeIsolated {
+        let (userQuit, installingUpdate, liveInMenuBar) = MainActor.assumeIsolated {
             (StartupSettings.shared.userRequestedQuit,
+             StartupSettings.shared.isInstallingUpdate,
              StartupSettings.shared.isRunningHeadless
                 || StartupSettings.shared.showInMenuBar
                 || StartupSettings.shared.hasStatusItem)
@@ -912,7 +913,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // to hiding all windows so the menu bar icon (and the process) stays
         // resident. This is what makes "Show in Menu Bar" behave like a true
         // background menu bar agent: exiting the app leaves the icon running.
-        if userQuit || !liveInMenuBar {
+        // A Sparkle-initiated relaunch (installingUpdate) must always terminate,
+        // exactly like an explicit user quit — otherwise the update install stalls.
+        if userQuit || installingUpdate || !liveInMenuBar {
             return .terminateNow
         }
         // Stay alive in the menu bar: hide every window and cancel the quit.

@@ -113,6 +113,13 @@ final class StartupSettings {
     // menu bar is on, we cancel so the app keeps living in the menu bar).
     var userRequestedQuit: Bool = false
 
+    // True once Sparkle is about to relaunch the app to install a downloaded
+    // update. Like userRequestedQuit, this lets applicationShouldTerminate allow
+    // a real termination even when the app would otherwise stay resident in the
+    // menu bar — without it, Sparkle's quit gets cancelled by the keep-alive rule
+    // and the install stalls until the user force-quits.
+    var isInstallingUpdate: Bool = false
+
     // Marks an explicit user quit and then terminates. Call from the menu bar
     // "Quit" item and the app's Cmd+Q command so the quit isn't cancelled by
     // applicationShouldTerminate's keep-alive rule.
