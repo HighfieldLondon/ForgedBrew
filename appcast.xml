@@ -6,6 +6,26 @@
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
         <item>
+            <title>Version 2.3.3</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.3.3</h2>
+                <p><strong>Trust Management Screening</strong> (formerly Trust Maintenance) — get ahead of Homebrew's <strong>September 1, 2026</strong> cask quarantine change, when Homebrew stops clearing the macOS quarantine flag for casks.</p>
+                <p>This screen now evaluates <strong>every</strong> Homebrew cask app against the four signals macOS Gatekeeper uses to trust an app — code signature, Developer ID, notarization, and Gatekeeper assessment — and flags, app by app, which ones could be blocked after Sept 1 and why. Results split into <em>Trust now</em> (actionable today) and <em>Watch for Sept 1</em> (runs fine now, at risk on a fresh download later). Trust apps one at a time with a deliberate per-app Trust button — no "Trust All."</p>
+                <p>Also includes a fix for Sparkle auto-update relaunch when running in the menu bar.</p>
+            ]]></description>
+            <pubDate>Fri, 19 Jun 2026 15:10:35 +0000</pubDate>
+            <sparkle:version>233</sparkle:version>
+            <sparkle:shortVersionString>2.3.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.3.3/ForgedBrew.dmg"
+                sparkle:version="233"
+                sparkle:shortVersionString="2.3.3"
+                length="13039602"
+                type="application/octet-stream"
+                sparkle:edSignature="LtgKdtDT+6FBeG9UyH0TyS2CTcZSSR86z80XiTOAIFFstil950LKXagjSa83wCa7Qazq4JeBkt4xs0Ahu1PwBg==" />
+        </item>
+        <item>
             <title>Version 2.3.2</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.3.2</h2>
