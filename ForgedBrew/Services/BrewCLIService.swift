@@ -890,10 +890,12 @@ func brewVersion() async throws -> String {
 
         try process.run()
         let readHandle = pipe.fileHandleForReading
+        // Read AND wait off the actor so we never block the cooperative thread pool.
         let data = await Task.detached(priority: .utility) {
-            readHandle.readDataToEndOfFile()
+            let d = readHandle.readDataToEndOfFile()
+            process.waitUntilExit()
+            return d
         }.value
-        process.waitUntilExit()
 
         guard let output = String(data: data, encoding: .utf8) else {
             throw BrewCLIError.processError("Failed to decode output")
@@ -2041,11 +2043,17 @@ func brewVersion() async throws -> String {
         } catch {
             return nil
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard let text = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              let epoch = TimeInterval(text) else { return nil }
+        let handle = pipe.fileHandleForReading
+        // Read and wait off the actor to avoid blocking the cooperative thread pool.
+        let epoch: TimeInterval? = await Task.detached(priority: .utility) {
+            let data = handle.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard let text = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  let t = TimeInterval(text) else { return nil }
+            return t
+        }.value
+        guard let epoch else { return nil }
         return Date(timeIntervalSince1970: epoch)
     }
 
@@ -2227,13 +2235,15 @@ func brewVersion() async throws -> String {
             return TapActionResult(success: false, message: error.localizedDescription)
         }
         let readHandle = pipe.fileHandleForReading
-        let data = await Task.detached(priority: .utility) {
-            readHandle.readDataToEndOfFile()
+        // Read AND wait off the actor so we never block the cooperative thread pool.
+        let (data, exitStatus) = await Task.detached(priority: .utility) {
+            let d = readHandle.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (d, process.terminationStatus)
         }.value
-        process.waitUntilExit()
         let raw = BrewCLIService.stripANSI(String(data: data, encoding: .utf8) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return TapActionResult(success: process.terminationStatus == 0, message: raw)
+        return TapActionResult(success: exitStatus == 0, message: raw)
     }
 
     // MARK: - Adopt (bring an existing app under Homebrew management)

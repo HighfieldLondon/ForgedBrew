@@ -1688,15 +1688,20 @@ final class AppDataService {
                 )
             }
 
-            // 2. Wait for each upgrade task to complete. Awaiting a Task value
-            //    blocks until it finishes (the gate inside BrewCLIService still
-            //    serializes the actual brew subprocesses one at a time). As each
+            // 2. Capture task references immediately after starting them, before
+            //    any can finish and be removed from installTasks. Awaiting a stale
+            //    optional via installTasks[token]?.value would silently no-op if the
+            //    task had already completed and been cleared.
+            let upgradeTasks = packages.compactMap { self.installTasks[$0.token] }
+
+            // 3. Wait for each captured task to complete. The BrewCLIService gate
+            //    serializes the actual brew subprocesses one at a time. As each
             //    finishes, finish() has already pinned its row on "Cleaning up…".
-            for pkg in packages {
-                await self.installTasks[pkg.token]?.value
+            for task in upgradeTasks {
+                await task.value
             }
 
-            // 3. One shared `brew cleanup` for the whole batch. The successfully
+            // 4. One shared `brew cleanup` for the whole batch. The successfully
             //    upgraded rows are already showing "Cleaning up…" (pinned by
             //    finish()); they STAY pinned through this single cleanup pass.
             //    Rows that failed are no longer batch-managed and show their
@@ -1708,7 +1713,7 @@ final class AppDataService {
                 }
             }
 
-            // 4. Shared cleanup done: mark each pinned row Done, drop its
+            // 5. Shared cleanup done: mark each pinned row Done, drop its
             //    batch-managed flag, and schedule the normal 4-second HUD fade.
             for pkg in pinned {
                 self.batchManagedClearTokens.remove(pkg.token)
@@ -1969,14 +1974,29 @@ final class AppDataService {
             kind: .install,
             isContinuation: true
         )
-        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
-            // provideSudoPassword always invokes a continuation-backed closure
-            // (both on success and cancel), so resuming with the current session
-            // password yields the entered value on success or nil on cancel.
-            queuedSudoOperations[request.id] = { [weak self] in
-                continuation.resume(returning: self?.sessionSudoPassword)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+                // provideSudoPassword always invokes a continuation-backed closure
+                // (both on success and cancel), so resuming with the current session
+                // password yields the entered value on success or nil on cancel.
+                queuedSudoOperations[request.id] = { [weak self] in
+                    continuation.resume(returning: self?.sessionSudoPassword)
+                }
+                pendingSudoRequest = request
             }
-            pendingSudoRequest = request
+        } onCancel: { [weak self] in
+            // If the task is cancelled before the sheet is presented or dismissed
+            // (e.g. app quit, task dropped), resume the continuation with nil so
+            // it is never left dangling.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let op = self.queuedSudoOperations.removeValue(forKey: request.id) {
+                    op()
+                }
+                if self.pendingSudoRequest?.id == request.id {
+                    self.pendingSudoRequest = nil
+                }
+            }
         }
     }
 

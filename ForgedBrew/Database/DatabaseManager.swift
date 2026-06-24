@@ -122,12 +122,12 @@ struct CaskRecord: FetchableRecord, PersistableRecord, TableRecord {
                let fallbackCask = try? JSONDecoder().decode(CaskMetadata.self, from: fallbackData) {
                 return fallbackCask
             }
-            // Last-resort: force a build with the required fields only.
-            let minimalData = try! JSONSerialization.data(
-                withJSONObject: ["token": token, "name": [token], "deprecated": false],
-                options: []
-            )
-            return try! JSONDecoder().decode(CaskMetadata.self, from: minimalData)
+            // The fallback dict above and this minimal dict are identical — if the
+            // second try? failed we will never get a different result here. Reaching
+            // this point means CaskMetadata's required fields changed without a
+            // matching DB migration, which is a programmer error worth surfacing
+            // loudly rather than crashing with a cryptic nil/force-unwrap.
+            fatalError("ForgedBrew: CaskRecord cannot decode minimal CaskMetadata for '\(token)': \(error)")
         }
     }
 }
@@ -271,9 +271,11 @@ actor DatabaseManager {
 
     private init() {
         let fm = FileManager.default
-        let appSupport = fm.urls(
+        guard let appSupport = fm.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
+        ).first else {
+            fatalError("ForgedBrew: Application Support directory not found — cannot open database")
+        }
         // Migrate any legacy Application Support folder to "ForgedBrew" on first
         // launch so existing data (DB + cache) is preserved across upgrades.
         let legacyDir = appSupport.appendingPathComponent("Hopsight")

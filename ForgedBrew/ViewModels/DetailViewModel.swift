@@ -83,7 +83,6 @@ final class DetailViewModel {
     // (when it's a github.com URL) or a host-matched search result. Used so the
     // Releases tab can link to a discovered repo, not just homepage-derived ones.
     var resolvedRepoURL: URL? = nil
-    var installLog: [String] = []
     var installState: InstallState = .idle
     var selectedTab: DetailTab = .overview
     // True when the screenshots we are displaying are NOT real app screenshots
@@ -762,7 +761,6 @@ final class DetailViewModel {
     }
 
     func resetState() {
-        installLog = []
         installState = .idle
     }
 

@@ -423,6 +423,23 @@ final class AppUpdateService {
             process.standardError = errPipe
             process.standardOutput = Pipe()
 
+            // Resume via terminationHandler so the continuation body never blocks
+            // a cooperative thread.
+            process.terminationHandler = { p in
+                if p.terminationStatus == 0 {
+                    continuation.resume(returning: nil)
+                } else {
+                    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errText = String(data: errData, encoding: .utf8) ?? ""
+                    // Strip sudo's password prompt echo so the user sees the real error.
+                    let cleaned = errText
+                        .replacingOccurrences(of: "Password:", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    continuation.resume(returning: cleaned.isEmpty
+                        ? "The app couldn't be removed (permission denied)."
+                        : cleaned)
+                }
+            }
             do {
                 try process.run()
             } catch {
@@ -433,21 +450,6 @@ final class AppUpdateService {
             let handle = stdinPipe.fileHandleForWriting
             handle.write(Data((password + "\n").utf8))
             try? handle.close()
-
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                continuation.resume(returning: nil)
-            } else {
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let errText = String(data: errData, encoding: .utf8) ?? ""
-                // Strip sudo's password prompt echo so the user sees the real error.
-                let cleaned = errText
-                    .replacingOccurrences(of: "Password:", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                continuation.resume(returning: cleaned.isEmpty
-                    ? "The app couldn't be removed (permission denied)."
-                    : cleaned)
-            }
         }
     }
 
@@ -923,15 +925,18 @@ final class AppUpdateService {
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = Pipe()
+            // Resume via terminationHandler so the continuation body never blocks a
+            // cooperative thread. readDataToEndOfFile() is safe to call here because
+            // the process has already closed its write end when the handler fires.
+            process.terminationHandler = { _ in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                cont.resume(returning: String(data: data, encoding: .utf8))
+            }
             do {
                 try process.run()
             } catch {
                 cont.resume(returning: nil)
-                return
             }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            cont.resume(returning: String(data: data, encoding: .utf8))
         }
     }
 
@@ -950,15 +955,17 @@ final class AppUpdateService {
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe   // merge stderr so mas error text is captured
+            // Resume via terminationHandler so the continuation body never blocks a
+            // cooperative thread.
+            process.terminationHandler = { p in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                cont.resume(returning: (String(data: data, encoding: .utf8), p.terminationStatus))
+            }
             do {
                 try process.run()
             } catch {
                 cont.resume(returning: (error.localizedDescription, -1))
-                return
             }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            cont.resume(returning: (String(data: data, encoding: .utf8), process.terminationStatus))
         }
     }
 

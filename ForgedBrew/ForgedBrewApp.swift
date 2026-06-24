@@ -488,9 +488,9 @@ enum WindowFramePersistence {
     // guard those echo-resizes (and SwiftUI's own content-driven resize that
     // lands a tick later) would SAVE the default size back over the user's
     // value. We only re-arm saving once the launch restore has fully settled.
-    static var isRestoring = false
+    @MainActor static var isRestoring = false
 
-    static func save(_ window: NSWindow) {
+    @MainActor static func save(_ window: NSWindow) {
         guard !isRestoring else { return }
         // Ignore zero/again-degenerate frames AppKit can momentarily report.
         guard window.frame.width > 1, window.frame.height > 1 else { return }
@@ -542,7 +542,7 @@ enum WindowFramePersistence {
     // content-driven resize fires. Saving stays suppressed the whole time so
     // none of these echoes overwrite the user's saved value; we re-arm at the
     // end. A blanket 3s of enforcement is simple and reliably beats the race.
-    static func enforceRestore(on window: NSWindow, fit: @escaping (NSWindow) -> Void) {
+    @MainActor static func enforceRestore(on window: NSWindow, fit: @escaping (NSWindow) -> Void) {
         isRestoring = true
         let deadline = Date().addingTimeInterval(3.0)
         // Apply once immediately so the very first paint is already correct.

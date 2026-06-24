@@ -294,7 +294,9 @@ enum SortOrder: String, CaseIterable {
                     self.applyFilters()
                 } else if self.scopeCategory != nil {
                     // Scoped: filter the full catalog (applyFilters handles the
-                    // scope + text matching below).
+                    // scope + text matching below). Reset pagination so a large
+                    // category (e.g. Fonts) doesn't render thousands of cards.
+                    self.flatDisplayLimit = Self.flatPageSize
                     self.casks = self.fullCatalog
                     self.applyFilters()
                 } else if let db = self.db {

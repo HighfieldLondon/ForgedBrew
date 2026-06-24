@@ -31,7 +31,8 @@ final class HomeViewModel {
             // 3. Featured
             featuredCask = trendingCasks.first
         } catch {
-            // Silently ignore errors as requested
+            // Non-fatal: leave lists empty and log so failures are diagnosable.
+            print("[HomeViewModel] Failed to load home data: \(error)")
         }
     }
 }
