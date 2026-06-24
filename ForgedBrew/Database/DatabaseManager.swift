@@ -113,21 +113,22 @@ struct CaskRecord: FetchableRecord, PersistableRecord, TableRecord {
             let data = try JSONSerialization.data(withJSONObject: dict, options: [])
             return try JSONDecoder().decode(CaskMetadata.self, from: data)
         } catch {
-            let fallbackDict: [String: Any] = [
-                "token": token,
-                "name": [token],
-                "deprecated": false
-            ]
-            if let fallbackData = try? JSONSerialization.data(withJSONObject: fallbackDict, options: []),
-               let fallbackCask = try? JSONDecoder().decode(CaskMetadata.self, from: fallbackData) {
-                return fallbackCask
-            }
-            // The fallback dict above and this minimal dict are identical — if the
-            // second try? failed we will never get a different result here. Reaching
-            // this point means CaskMetadata's required fields changed without a
-            // matching DB migration, which is a programmer error worth surfacing
-            // loudly rather than crashing with a cryptic nil/force-unwrap.
-            fatalError("ForgedBrew: CaskRecord cannot decode minimal CaskMetadata for '\(token)': \(error)")
+            // The JSON round-trip above failed (e.g. a stale on-disk row predates
+            // a CaskMetadata field change). Degrade gracefully rather than
+            // crashing the process on a persisted-data read: build a minimal cask
+            // directly via the memberwise initializer so the catalog still loads
+            // and the offending row simply shows sparse detail.
+            NSLog("ForgedBrew: CaskRecord fell back to minimal CaskMetadata for '%@': %@",
+                  token, String(describing: error))
+            return CaskMetadata(
+                token: token,
+                name: nameArray.isEmpty ? [token] : nameArray,
+                desc: desc,
+                homepage: homepage,
+                downloadURL: downloadURL,
+                version: version,
+                deprecated: deprecated
+            )
         }
     }
 }

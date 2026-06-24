@@ -224,7 +224,7 @@ green "    appcast.xml updated."
 bold "==> Committing and tagging v$VERSION…"
 cd "$REPO_DIR"
 git add ForgedBrew.xcodeproj/project.pbxproj appcast.xml
-git commit -m "Release $VERSION: batch-update password fix"
+git commit -m "Release $VERSION: update appcast"
 git tag "v$VERSION"
 git push origin main
 git push origin "v$VERSION"

@@ -196,8 +196,12 @@ final class TopgradeService {
 
     nonisolated static func writeAskpassAssets(password: String) -> AskpassAssets? {
         let dir = NSTemporaryDirectory()
-        let scriptURL = URL(fileURLWithPath: dir).appendingPathComponent("forgedbrew-tg-askpass.sh")
-        let pwURL = URL(fileURLWithPath: dir).appendingPathComponent("forgedbrew-tg-askpass-pw")
+        // Per-operation random suffix so two concurrent topgrade runs can't share
+        // (and delete out from under each other) the same password file, and so
+        // the path isn't predictable/pre-creatable by another local user.
+        let nonce = UUID().uuidString
+        let scriptURL = URL(fileURLWithPath: dir).appendingPathComponent("forgedbrew-tg-askpass-\(nonce).sh")
+        let pwURL = URL(fileURLWithPath: dir).appendingPathComponent("forgedbrew-tg-askpass-pw-\(nonce)")
         let pwBytes = Data((password + "\n").utf8)
         let body = """
         #!/bin/sh

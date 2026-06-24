@@ -229,12 +229,29 @@ nonisolated struct CaskMetadata: Codable, Sendable, Identifiable, Hashable {
     // tail (releases/download/..., /tree/..., etc.). Skips non-repo owners like
     // "downloads"/"raw"/"gist" hosts that aren't api/repo-bearing. nil when no
     // owner/repo pair can be recovered.
+    // Owner path segments on github.com that are never user/org repos. Keeps a
+    // URL like github.com/sponsors/foo or a raw/gist path from yielding a bogus
+    // owner/repo pair that would feed the vulnerability scan a repo that doesn't
+    // exist (a clean false-negative) and a broken "Open Source" badge.
+    private static let nonRepoGitHubOwners: Set<String> = [
+        "sponsors", "marketplace", "apps", "features", "about", "pricing",
+        "settings", "notifications", "login", "join", "explore", "topics",
+        "collections", "trending", "downloads", "raw", "gist", "orgs", "users"
+    ]
+
     static func extractGitHubRepo(from string: String?) -> URL? {
         guard let string, let range = string.lowercased().range(of: "github.com/") else { return nil }
-        let afterHost = String(string[range.upperBound...])
+        // Drop any query string / fragment before splitting so a URL like
+        // github.com/owner/repo.zip?x=1 or .../repo#readme doesn't smuggle the
+        // tail into the repo name.
+        var afterHost = String(string[range.upperBound...])
+        if let cut = afterHost.firstIndex(where: { $0 == "?" || $0 == "#" }) {
+            afterHost = String(afterHost[..<cut])
+        }
         let components = afterHost.split(separator: "/", omittingEmptySubsequences: true).map { String($0) }
         guard components.count >= 2 else { return nil }
         let owner = components[0]
+        guard !nonRepoGitHubOwners.contains(owner.lowercased()) else { return nil }
         var repo = components[1]
         if repo.hasSuffix(".git") { repo = String(repo.dropLast(4)) }
         guard !owner.isEmpty, !repo.isEmpty else { return nil }

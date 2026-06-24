@@ -106,7 +106,7 @@ struct SudoPasswordSheet: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.green)
                     .frame(width: 14)
-                Text("Kept in memory for this session only, so you won't be asked again until you quit ForgedBrew. It is never written to disk or your Keychain.")
+                Text("Kept in memory for this session only, so you won't be asked again until you quit ForgedBrew. It is never saved to your Keychain — only handed to brew through a temporary, owner-only file that is deleted the moment the operation finishes.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -178,6 +178,22 @@ actor BrewAPIService {
         "\(owner)/\(repo)"
     }
 
+    // Stores a value in one of the (value:, fetchedAt:) TTL caches and bounds its
+    // size: when the entry count exceeds `cap`, the oldest entries (by fetchedAt)
+    // are evicted down to `cap`. Without this the per-session text caches (README
+    // bodies, full Wikipedia articles) grow unbounded as the user opens more
+    // packages, since entries were only ever TTL-checked on read, never removed.
+    private func storeCapped<V>(_ value: V,
+                                forKey key: String,
+                                in cache: inout [String: (value: V, fetchedAt: Date)],
+                                cap: Int) {
+        cache[key] = (value, Date())
+        guard cache.count > cap else { return }
+        let overflow = cache.count - cap
+        let oldest = cache.sorted { $0.value.fetchedAt < $1.value.fetchedAt }.prefix(overflow)
+        for (k, _) in oldest { cache.removeValue(forKey: k) }
+    }
+
     private init() {
         let config = URLSessionConfiguration.default
         config.httpAdditionalHeaders = ["User-Agent": "ForgedBrew/1.0"]
@@ -186,6 +202,12 @@ actor BrewAPIService {
             diskCapacity: 50 * 1024 * 1024
         )
         config.requestCachePolicy = .returnCacheDataElseLoad
+        // Without explicit timeouts every call inherits the 60s default, so the
+        // ~15 MB catalog fetch or a stalled GitHub call could hang for a full
+        // minute on a flaky network. Bound per-request waits tightly; allow the
+        // large catalog resource a more generous overall ceiling.
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
         self.session = URLSession(configuration: config)
 
         let dec = JSONDecoder()
@@ -1029,7 +1051,7 @@ actor BrewAPIService {
                         userInfo: [NSLocalizedDescriptionKey: "Failed to decode README base64"])
             )
         }
-        githubReadmeCache[key] = (text, Date())
+        storeCapped(text, forKey: key, in: &githubReadmeCache, cap: 200)
         return text
     }
 
@@ -1081,7 +1103,7 @@ actor BrewAPIService {
             if let summary = await wikipediaSummary(title: cand),
                isRelevantWikiSummary(summary, appName: trimmed, homepage: homepage),
                let extract = summaryExtractText(summary) {
-                aboutBlurbCache[key] = (extract, Date())
+                storeCapped(extract, forKey: key, in: &aboutBlurbCache, cap: 300)
                 return extract
             }
         }
@@ -1096,7 +1118,7 @@ actor BrewAPIService {
            let summary = await wikipediaSummary(title: resolved),
            isRelevantWikiSummary(summary, appName: trimmed, homepage: homepage),
            let extract = summaryExtractText(summary) {
-            aboutBlurbCache[key] = (extract, Date())
+            storeCapped(extract, forKey: key, in: &aboutBlurbCache, cap: 300)
             return extract
         }
 
@@ -1112,12 +1134,12 @@ actor BrewAPIService {
                let summary = await wikipediaSummary(title: resolved),
                isRelevantWikiSummary(summary, appName: trimmed, homepage: homepage),
                let extract = summaryExtractText(summary) {
-                aboutBlurbCache[key] = (extract, Date())
+                storeCapped(extract, forKey: key, in: &aboutBlurbCache, cap: 300)
                 return extract
             }
         }
 
-        aboutBlurbCache[key] = (nil, Date())
+        storeCapped(nil, forKey: key, in: &aboutBlurbCache, cap: 300)
         return nil
     }
 
@@ -1516,7 +1538,7 @@ actor BrewAPIService {
             guard let summary = await wikipediaSummary(title: cand),
                   isRelevantWikiSummary(summary, appName: trimmed, homepage: homepage) else { continue }
             if let body = await wikipediaExtractMarkdown(title: cand) {
-                wikiFullArticleCache[key] = (body, Date())
+                storeCapped(body, forKey: key, in: &wikiFullArticleCache, cap: 150)
                 return body
             }
         }
@@ -1524,7 +1546,7 @@ actor BrewAPIService {
            let summary = await wikipediaSummary(title: resolved),
            isRelevantWikiSummary(summary, appName: trimmed, homepage: homepage),
            let body = await wikipediaExtractMarkdown(title: resolved) {
-            wikiFullArticleCache[key] = (body, Date())
+            storeCapped(body, forKey: key, in: &wikiFullArticleCache, cap: 150)
             return body
         }
         // Disambiguated retry (Loom problem) — mirror fetchAboutBlurb: when the
@@ -1536,11 +1558,11 @@ actor BrewAPIService {
                let summary = await wikipediaSummary(title: resolved),
                isRelevantWikiSummary(summary, appName: trimmed, homepage: homepage),
                let body = await wikipediaExtractMarkdown(title: resolved) {
-                wikiFullArticleCache[key] = (body, Date())
+                storeCapped(body, forKey: key, in: &wikiFullArticleCache, cap: 150)
                 return body
             }
         }
-        wikiFullArticleCache[key] = (nil, Date())
+        storeCapped(nil, forKey: key, in: &wikiFullArticleCache, cap: 150)
         return nil
     }
 

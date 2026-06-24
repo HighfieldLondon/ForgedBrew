@@ -259,8 +259,22 @@ final class AppDataService {
                 progress: pair.value
             )
         }
-        // Otherwise a lingering finished/failed entry.
-        if let pair = installProgress.first {
+        // Otherwise a lingering finished/failed entry. `installProgress.first` is
+        // nondeterministic (dictionary order), so when several just-finished
+        // entries linger the HUD could flip to an unrelated package. Pick
+        // deterministically: surface a failure first (the user most needs to see
+        // it), then fall back to a stable token-ordered choice.
+        func isFailed(_ phase: InstallProgress.Phase) -> Bool {
+            if case .failed = phase { return true }
+            return false
+        }
+        let lingering = installProgress.min { lhs, rhs in
+            let lFailed = isFailed(lhs.value.phase)
+            let rFailed = isFailed(rhs.value.phase)
+            if lFailed != rFailed { return lFailed }
+            return lhs.key < rhs.key
+        }
+        if let pair = lingering {
             return ActiveInstallEntry(
                 token: pair.key,
                 displayName: displayName(forToken: pair.key),

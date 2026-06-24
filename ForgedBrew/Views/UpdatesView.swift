@@ -51,12 +51,18 @@ struct UpdateRowView: View {
     // Install/updated date pill, matching the Installed screen. Labeled
     // "Updated" for outdated rows and "Installed" otherwise (brew exposes a
     // single timestamp). nil date → omit the pill.
-    private var dateText: String? {
-        guard let date = package.installedDate else { return nil }
+    // Shared, configured once — DateFormatter construction is expensive and this
+    // runs in a row body for every visible row on every render.
+    private static let dateFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         fmt.timeStyle = .none
-        return fmt.string(from: date)
+        return fmt
+    }()
+
+    private var dateText: String? {
+        guard let date = package.installedDate else { return nil }
+        return Self.dateFormatter.string(from: date)
     }
 
     // Tint for the status icon + label: accent while in flight, green on

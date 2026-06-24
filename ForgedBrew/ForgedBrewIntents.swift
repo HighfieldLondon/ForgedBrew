@@ -61,6 +61,14 @@ struct InstallCaskIntent: AppIntent {
 
         let appData = AppDataService.shared
 
+        // Installing software is a privileged, side-effectful action and the
+        // token arrives as free text (typed or voice-transcribed), so confirm
+        // before running brew unattended.
+        try await requestConfirmation(
+            actionName: .go,
+            dialog: IntentDialog("Install \(trimmed) with Homebrew?")
+        )
+
         // Drive the same streaming install pipeline the UI uses; drain it to
         // completion so the intent doesn't return before the install finishes.
         let stream = appData.install(cask: trimmed)
@@ -69,12 +77,20 @@ struct InstallCaskIntent: AppIntent {
             lastLine = line
         }
 
-        let failed = lastLine.lowercased().contains("error")
-            || lastLine.lowercased().contains("failed")
-        if failed {
-            return .result(dialog: IntentDialog("Install of \(trimmed) did not complete: \(lastLine)"))
+        // Decide success from actual installed state rather than scraping the
+        // last output line for "error"/"failed" — brew's final line is often a
+        // caveats block (which legitimately contains the word "error") or a
+        // success banner, so the substring heuristic produced both false
+        // successes and false failures. The presence of the cask in the freshly
+        // refreshed inventory is authoritative.
+        await appData.refreshInstalled()
+        let installed = appData.installedPackages.contains {
+            $0.token.caseInsensitiveCompare(trimmed) == .orderedSame
         }
-        return .result(dialog: IntentDialog("Installed \(trimmed)."))
+        if installed {
+            return .result(dialog: IntentDialog("Installed \(trimmed)."))
+        }
+        return .result(dialog: IntentDialog("Install of \(trimmed) did not complete: \(lastLine)"))
     }
 }
 

@@ -28,6 +28,35 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.3.7
+
+A round of correctness, performance, and reliability polish:
+
+- **More reliable update detection** — apps that bump only their build number
+  (common for self-updating apps like browsers and Office) are no longer
+  missed, and version comparison handles `v`-prefixed and parenthesised build
+  versions correctly.
+- **Smoother Installed & Updates lists** — date formatting and the update HUD
+  were optimised to do less work while you scroll, so large libraries feel
+  snappier.
+- **Sturdier networking** — catalog and detail requests now have explicit
+  timeouts, so a slow or flaky connection can no longer hang a load for a full
+  minute.
+- **Lighter memory use** — the in-memory caches for README, About, and
+  Wikipedia text are now bounded, keeping memory in check during long browsing
+  sessions.
+- **Smarter Shortcuts/Siri install** — the "Install Cask" intent now asks for
+  confirmation before installing and reports success based on what was actually
+  installed, not by guessing from log text.
+- **More accurate Open-Source & security info** — GitHub repository detection
+  ignores query strings and non-repository links, improving the "Open Source"
+  badge and vulnerability lookups.
+- **Hardened admin-password handling** and a more accurate description of how
+  your password is used, plus a startup-robustness fix so a stale local cache
+  entry can never prevent the app from opening.
+
+---
+
 ## Why ForgedBrew
 
 Homebrew is incredibly powerful, but it lives entirely in the Terminal. That

@@ -1155,6 +1155,15 @@ struct ParkedAppUpdateRow: View {
     let record: ParkedAppUpdate
     let service: AppUpdateService
 
+    // Shared, configured once — avoids rebuilding a DateFormatter in the row body
+    // on every render.
+    private static let expiryFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .short
+        return fmt
+    }()
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: record.parkType.symbol)
@@ -1204,10 +1213,7 @@ struct ParkedAppUpdateRow: View {
             return "Held until the next version ships"
         case .duration:
             if let expires = record.expiresAt {
-                let fmt = DateFormatter()
-                fmt.dateStyle = .medium
-                fmt.timeStyle = .short
-                return "Held until \(fmt.string(from: expires))"
+                return "Held until \(Self.expiryFormatter.string(from: expires))"
             }
             return "Held for a set time"
         }

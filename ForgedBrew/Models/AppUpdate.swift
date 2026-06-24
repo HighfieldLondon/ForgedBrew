@@ -157,20 +157,33 @@ nonisolated enum AppVersion {
     // → [2, 0, 1]; "v1.4.3" → [1, 4, 3]; "26.084.0504" → [26, 84, 504].
     static func numericComponents(_ version: String) -> [Int] {
         var comps: [Int] = []
-        // Split on "." and the common build separators, then take the leading
-        // integer of each chunk (so "0504" → 504, "1+build" → 1).
-        let chunks = version.split(whereSeparator: { $0 == "." || $0 == "-" || $0 == "_" || $0 == " " })
+        // Split on "." and the common build separators — including parentheses
+        // and "+" so a Sparkle/MAS build suffix like "1.4.3 (101)" or "1.4.3+101"
+        // contributes its build number. Take the leading integer of each chunk
+        // (so "0504" → 504).
+        let chunks = version.split(whereSeparator: {
+            $0 == "." || $0 == "-" || $0 == "_" || $0 == " " || $0 == "(" || $0 == ")" || $0 == "+"
+        })
         for chunk in chunks {
+            // Allow a single leading "v"/"V" version prefix ("v2" → 2) so a
+            // v-prefixed string still contributes its major number, then take the
+            // leading digit run. A chunk that is non-numeric after that (e.g.
+            // "beta", "rc1") contributes nothing but doesn't stop the scan — so a
+            // build-only bump ("1.4.3 (100)" → "1.4.3 (101)", which splits the
+            // build into its own "101" chunk) is still seen as newer, while alpha
+            // pre-release tags don't perturb the ordered numeric compare.
+            var body = Substring(chunk)
+            if let first = body.first, first == "v" || first == "V" {
+                body = body.dropFirst()
+            }
             var digits = ""
-            for ch in chunk {
+            for ch in body {
                 if ch.isNumber { digits.append(ch) } else { break }
             }
-            if digits.isEmpty {
-                // A non-numeric chunk (e.g. "beta"): stop — trailing tags don't
-                // participate in the ordered numeric compare.
-                break
-            }
-            comps.append(Int(digits) ?? 0)
+            if digits.isEmpty { continue }
+            // Guard against absurdly long digit runs overflowing Int (which would
+            // silently parse to 0 and invert the comparison): clamp to Int.max.
+            comps.append(Int(digits) ?? Int.max)
         }
         return comps
     }
