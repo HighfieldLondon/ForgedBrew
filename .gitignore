@@ -66,6 +66,9 @@ HANDOFF-*.md
 SPARKLE-RELEASE.md
 docs/ForgedBrew-GitHub-and-Gatekeeper-Guide.md
 
+# Release scripts — local identity config (contains PII, never committed)
+scripts/config.local.sh
+
 # Secrets / credentials / local env
 .env
 .env.*

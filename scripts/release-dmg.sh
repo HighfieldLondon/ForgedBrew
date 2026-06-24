@@ -22,9 +22,11 @@ set -euo pipefail
 # ----- Config -------------------------------------------------------------
 REPO_DIR="/Users/rich/Developer/ForgedBrew"
 VOLNAME="ForgedBrew"
-DEV_ID="Developer ID Application: RICHARD EUGENE WALLACE (5UNQZ5Q2K9)"
-TEAM_ID="5UNQZ5Q2K9"
 BUNDLE_ID="com.highfieldlondon.ForgedBrew"
+
+# Load identity values from local config (not committed — contains PII).
+# shellcheck source=config.local.sh
+source "$REPO_DIR/scripts/config.local.sh"
 
 # ----- Args ---------------------------------------------------------------
 APP_SRC="${1:-$REPO_DIR/ForgedBrew.app}"

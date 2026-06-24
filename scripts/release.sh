@@ -30,10 +30,13 @@ REPO_DIR="/Users/rich/Developer/ForgedBrew"
 SCHEME="ForgedBrew"
 PROJECT="$REPO_DIR/ForgedBrew.xcodeproj"
 BUNDLE_ID="com.highfieldlondon.ForgedBrew"
-KEYCHAIN_PROFILE="ForgedBrew"
 GITHUB_REPO="HighfieldLondon/ForgedBrew"
 VOLNAME="ForgedBrew"
 EXPORT_OPTIONS="$REPO_DIR/scripts/ExportOptions.plist"
+
+# Load identity values from local config (not committed — contains PII).
+# shellcheck source=config.local.sh
+source "$REPO_DIR/scripts/config.local.sh"
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 NOTES=""
