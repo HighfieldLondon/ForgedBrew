@@ -175,7 +175,7 @@ there is intentionally no "Trust All."
 
 ## Installing
 
-1. Download **ForgedBrew-2.3.2.dmg** from the
+1. Download **ForgedBrew.dmg** from the
    [latest release](https://github.com/HighfieldLondon/ForgedBrew/releases/latest).
 2. Open the DMG and drag **ForgedBrew** into your **Applications** folder.
 3. Double-click to launch.
