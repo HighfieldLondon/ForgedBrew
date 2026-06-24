@@ -60,14 +60,17 @@ forgedbrew-cache.sqlite
 # Agent/session working backups (not part of the build)
 .forgedbrew_backups/
 
-# Local-only session handoff notes (internal, never published)
+# Local-only internal notes & assistant context (internal, never published)
 .handoffs_local/
 HANDOFF-*.md
+HANDOFF.md
+CLAUDE.md
 SPARKLE-RELEASE.md
 docs/ForgedBrew-GitHub-and-Gatekeeper-Guide.md
 
-# Release scripts — local identity config (contains PII, never committed)
-scripts/config.local.sh
+# Release/automation scripts — local-only tooling, never published.
+# Contains local paths + identity config; kept out of the public repo.
+scripts/
 
 # Secrets / credentials / local env
 .env
