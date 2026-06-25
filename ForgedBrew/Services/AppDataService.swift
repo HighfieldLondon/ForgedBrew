@@ -91,6 +91,24 @@ nonisolated struct InstallProgress: Equatable, Sendable {
     }
     var statusSymbol: String { phase.statusSymbol }
 
+    // Hard cap on retained log lines. A chatty install — or a verbose
+    // `brew cleanup --prune=all -s -v`, which scans the whole cache — can stream
+    // thousands of lines. This value lives in a published dictionary that SwiftUI
+    // re-renders on every append, so an unbounded array is both a memory and a
+    // render-cost problem. We keep only the most recent lines; the tail is what
+    // matters for troubleshooting (the latest output and any final error).
+    static let maxLogLines = 500
+
+    // Append a line, trimming from the front so `log` never exceeds maxLogLines.
+    // Use this instead of `log.append(_:)` everywhere a brew output line is
+    // recorded, so the cap is enforced at a single chokepoint.
+    mutating func appendLog(_ line: String) {
+        log.append(line)
+        if log.count > Self.maxLogLines {
+            log.removeFirst(log.count - Self.maxLogLines)
+        }
+    }
+
     // Maps a raw brew output line to the phase it signals, if any. brew prints
     // progress headers as `==> <Verb>…` (the `ohai` markers in brew's source).
     // Returns nil for lines that don't indicate a phase change so the caller
@@ -162,6 +180,12 @@ final class AppDataService {
     // and isn't confused by panels that haven't filled in yet. Cleared the
     // moment refreshEverything() finishes.
     var isRefreshingEverything: Bool = false
+
+    // The single in-flight refreshEverything() run, used to coalesce overlapping
+    // global refreshes by awaiting it rather than dropping the second call. nil
+    // when no refresh is running. @MainActor-isolated like everything else here,
+    // so access needs no extra synchronization.
+    private var refreshEverythingTask: Task<Void, Never>?
 
     // A request, raised from a Mac App / Other Apps row, to take the user to
     // the Adopt flow in Maintenance instead of adopting inline. The row sets
@@ -314,6 +338,20 @@ final class AppDataService {
     // (on the singleton) rather than in a view so navigating away can't cancel
     // them. Presence in this dict == "an operation is in flight for this token".
     private var installTasks: [String: Task<Void, Never>] = [:]
+
+    // The detached, best-effort post-install `brew cleanup` runs, keyed by token.
+    // These outlive the install Task (the row already reads "Done" while cleanup
+    // tidies the cache in the background), so they're tracked separately rather
+    // than in installTasks. Tracking lets us cancel a token's stale cleanup if a
+    // fresh operation for the SAME token starts within the cleanup window —
+    // otherwise the old cleanup's log lines would bleed into the new operation's
+    // HUD entry.
+    private var cleanupTasks: [String: Task<Void, Never>] = [:]
+
+    // Generation id per token's in-flight cleanup. Lets a finishing cleanup task
+    // clear its slot only when it's still the current one (Task isn't identity-
+    // comparable), preventing a superseded task from clobbering a newer entry.
+    private var cleanupGenerations: [String: UUID] = [:]
 
     // MARK: - Non-Homebrew app updates (topgrade)
     //
@@ -542,21 +580,46 @@ final class AppDataService {
     // Sets isRefreshingEverything around the whole run so the UI can show a
     // non-blocking "Refreshing your data…" indicator that clears on completion.
     func refreshEverything() async {
-        // Coalesce overlapping global refreshes (e.g. launch + a manual rescan)
-        // so the overlay flag and underlying work don't double-run.
-        guard !isRefreshingEverything else { return }
-        isRefreshingEverything = true
-        // Always clear the flag, even if an awaited step is cancelled, so the
-        // "Refreshing your data…" overlay can never get stuck on screen.
-        defer { isRefreshingEverything = false }
-        // Fill the three inventory panels (Installed, Homebrew Updates, Mac/Other
-        // apps) FIRST and concurrently, so they're populated the instant the
-        // window appears — not only after the user clicks into each one. The
-        // slower catalog + analytics network fetches then fill in behind them.
-        await refreshInventoryFast()
-        await refreshCasks()
-        await refreshFormulas()
-        await refreshAnalytics()
+        // Coalesce overlapping global refreshes (e.g. launch + a manual rescan,
+        // or the background coordinator ticking while the launch refresh is
+        // still suspended at an await).
+        //
+        // IMPORTANT: we must NOT early-return on overlap. The previous
+        // `guard !isRefreshingEverything else { return }` returned immediately
+        // without refreshing, which meant an overlapping caller proceeded as if
+        // a check had completed — the BackgroundRefreshCoordinator would then
+        // re-stamp the badge and run its new-update notification logic on STALE
+        // data, and the dropped check wasn't retried until the next interval
+        // (1h+). Instead we share a single in-flight Task: a second caller
+        // awaits that run's result, so by the time refreshEverything() returns,
+        // a real refresh has happened and every caller sees fresh data.
+        if let existing = refreshEverythingTask {
+            await existing.value
+            return
+        }
+        let task = Task { @MainActor in
+            isRefreshingEverything = true
+            // Always clear the flag + handle slot, even if an awaited step is
+            // cancelled, so the "Refreshing your data…" overlay can never get
+            // stuck on screen and the next call can start a fresh run.
+            defer {
+                isRefreshingEverything = false
+                refreshEverythingTask = nil
+            }
+            // Fill the three inventory panels (Installed, Homebrew Updates,
+            // Mac/Other apps) FIRST and concurrently, so they're populated the
+            // instant the window appears — not only after the user clicks into
+            // each one. The slower catalog + analytics network fetches then fill
+            // in behind them.
+            await refreshInventoryFast()
+            await refreshCasks()
+            await refreshFormulas()
+            await refreshAnalytics()
+        }
+        // Assigned before the task body runs (both are @MainActor, so the body
+        // can't start until we suspend at `await task.value` below).
+        refreshEverythingTask = task
+        await task.value
     }
 
     // Rescans Mac App Store / other (non-Homebrew) apps for available updates,
@@ -590,7 +653,7 @@ final class AppDataService {
         let stream = await cli.adoptCask(token: token, force: force)
         for await line in stream {
             lines.append(line)
-            appUpdateProgress[bundleID]?.log.append(line)
+            appUpdateProgress[bundleID]?.appendLog(line)
         }
         let outcome = MaintenanceMetrics.adoptSummary(lines)
         if outcome.isSuccess {
@@ -1515,6 +1578,14 @@ final class AppDataService {
     ) {
         guard installTasks[token] == nil else { return }
 
+        // A previous install's background `brew cleanup` for this same token may
+        // still be running (the row finished, but cleanup tidies the cache
+        // afterward). Cancel it so its trailing output can't append into the
+        // fresh operation's HUD entry we create just below.
+        cleanupTasks[token]?.cancel()
+        cleanupTasks[token] = nil
+        cleanupGenerations[token] = nil
+
         // The view layer gates on ensureSessionSudoPassword() before calling us,
         // so by the time we're here the session password (if any) is already
         // captured. We simply use whatever we were handed, falling back to the
@@ -1652,13 +1723,35 @@ final class AppDataService {
             //    runs a single shared `brew cleanup` after the whole batch, which
             //    avoids the concurrent-cleanup pile-up.
             if runCleanup {
-                Task { [weak self] in
+                // Cancel any prior cleanup still running for this same token
+                // before starting a new one, so two cleanups can't interleave
+                // their log lines onto the row.
+                self.cleanupTasks[token]?.cancel()
+                // Tag this cleanup with a fresh generation id. The task clears its
+                // own slot on finish ONLY if it's still the current generation —
+                // otherwise a just-superseded (cancelled) cleanup, observing its
+                // cancellation a moment after a newer cleanup took the slot, would
+                // null out the NEW task's entry and let its output bleed through.
+                let generation = UUID()
+                self.cleanupGenerations[token] = generation
+                let cleanupTask = Task { [weak self] in
                     guard let self else { return }
                     self.appendLog(token: token, line: "==> Running brew cleanup (background)…")
                     for await line in await self.cli.cleanup() {
+                        // Stop appending if this cleanup was superseded (a fresh
+                        // operation for the same token started and cancelled us);
+                        // otherwise stale cleanup output would bleed into the new
+                        // operation's HUD entry.
+                        if Task.isCancelled { break }
                         self.appendLog(token: token, line: line)
                     }
+                    // Only clear if we're still the current cleanup for this token.
+                    if self.cleanupGenerations[token] == generation {
+                        self.cleanupTasks[token] = nil
+                        self.cleanupGenerations[token] = nil
+                    }
                 }
+                self.cleanupTasks[token] = cleanupTask
             }
         }
         installTasks[token] = task
@@ -1723,7 +1816,7 @@ final class AppDataService {
             let pinned = packages.filter { self.installProgress[$0.token]?.phase == .cleaningUp }
             for await line in await self.cli.cleanup() {
                 for pkg in pinned {
-                    self.installProgress[pkg.token]?.log.append(line)
+                    self.installProgress[pkg.token]?.appendLog(line)
                 }
             }
 
@@ -2062,7 +2155,7 @@ final class AppDataService {
             guard let self else { return }
             let stream = TopgradeService.shared.run(steps: [step], sudoPassword: effectivePassword)
             for await line in stream {
-                self.appUpdateProgress[key]?.log.append(line)
+                self.appUpdateProgress[key]?.appendLog(line)
                 if let phase = InstallProgress.phase(forLine: line) {
                     self.appUpdateProgress[key]?.phase = phase
                 }
@@ -2185,7 +2278,7 @@ final class AppDataService {
             guard let self else { return }
             let stream = TopgradeService.shared.run(steps: steps, sudoPassword: effectivePassword)
             for await line in stream {
-                self.appUpdateProgress[key]?.log.append(line)
+                self.appUpdateProgress[key]?.appendLog(line)
                 if let phase = InstallProgress.phase(forLine: line) {
                     self.appUpdateProgress[key]?.phase = phase
                 }
@@ -2269,7 +2362,7 @@ final class AppDataService {
     }
 
     private func appendLog(token: String, line: String) {
-        installProgress[token]?.log.append(line)
+        installProgress[token]?.appendLog(line)
     }
 
     private func setPhase(token: String, phase: InstallProgress.Phase) {

@@ -357,15 +357,6 @@ struct UpdatesView: View {
     // search. Bound from the shared search field by DetailRouter.
     var searchText: Binding<String> = .constant("")
 
-    // Case-insensitive match of the live search query against a package name or
-    // token. Empty query matches everything.
-    private func matchesSearch(_ pkg: InstalledPackage) -> Bool {
-        let q = searchText.wrappedValue.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return true }
-        return InstalledRowView.displayName(for: pkg.token).lowercased().contains(q)
-            || pkg.token.lowercased().contains(q)
-    }
-
     // Mirrors the Settings toggle: when on, ForgedBrew also checks apps that update
     // themselves (brew's `--greedy`). Surfaced here as a quick inline switch so
     // the user can flip it right from the Updates screen. Default true.
@@ -388,7 +379,16 @@ struct UpdatesView: View {
         // even though they're still outdated — they live in the Parked view.
         // The top section is always alphabetical (the sort control only governs
         // the lower full-installed list).
-        PackageSortOrder.name.sorted(appData.outdatedExcludingParked().filter(matchesSearch))
+        //
+        // Normalize the search query ONCE here rather than re-trimming and
+        // re-lowercasing it for every package (the old per-element matchesSearch).
+        let base = appData.outdatedExcludingParked()
+        let q = searchText.wrappedValue.trimmingCharacters(in: .whitespaces).lowercased()
+        let matched = q.isEmpty ? base : base.filter { pkg in
+            InstalledRowView.displayName(for: pkg.token).lowercased().contains(q)
+                || pkg.token.lowercased().contains(q)
+        }
+        return PackageSortOrder.name.sorted(matched)
     }
 
     // Selection scoped to rows that are still outdated (a token can leave the

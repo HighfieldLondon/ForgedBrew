@@ -45,6 +45,12 @@ struct SudoPasswordSheet: View {
             footer
         }
         .frame(width: 460, height: 360)
+        // Sheets don't reliably inherit the WindowGroup's
+        // .progressViewStyle(.forgedbrew), so re-apply it here: otherwise the
+        // bare ProgressView() (shown while validating the password) falls back
+        // to the AppKit NSProgressIndicator, which can ghost a grey spinner at
+        // the sheet's top-center. See SecurityScanSheet / ForgedBrewSpinner.
+        .progressViewStyle(.forgedbrew)
         .onAppear { fieldFocused = true }
     }
 

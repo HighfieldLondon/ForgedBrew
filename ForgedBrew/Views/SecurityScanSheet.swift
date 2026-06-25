@@ -31,6 +31,17 @@ struct SecurityScanSheet: View {
             footer
         }
         .frame(width: 620, height: 580)
+        // Use the pure-SwiftUI spinner for every ProgressView in this sheet.
+        // A sheet is presented in its own hosting context and does NOT reliably
+        // inherit the .progressViewStyle(.forgedbrew) applied at the WindowGroup
+        // root (the sibling Settings/Welcome/Manual windows re-apply it for the
+        // same reason). Without this, the bare ProgressView()s here (the header
+        // Scan-button spinner, the progress block, the footer) fall back to the
+        // AppKit NSProgressIndicator, which "ghosts" — briefly drawing a grey
+        // spinner at the sheet's top-center on each re-layout as scan results
+        // stream in. The custom style draws with SwiftUI shapes and fixed
+        // frames, so there is no AppKit host to ghost.
+        .progressViewStyle(.forgedbrew)
         // Disable ALL implicit animations on the sheet while a scan runs. As
         // each app finishes, counts change and per-app result rows stream in;
         // SwiftUI's default transitions would slide/fade a grey checkmark
@@ -64,7 +75,8 @@ struct SecurityScanSheet: View {
             // Scan/Re-scan sits just to the right of the title, matching the main pages.
             PageRefreshButton(metrics.securityHasScanned ? "Re-scan" : "Scan",
                               isWorking: metrics.securityScanning,
-                              size: .compact) {
+                              size: .compact,
+                              showsSpinner: false) {
                 Task { await metrics.loadSecurityScan(cli: cli) }
             }
             Spacer()

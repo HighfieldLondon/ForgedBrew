@@ -120,6 +120,12 @@ struct InstallLogSheet: View {
         }
         .padding(20)
         .frame(width: 460, height: 200)
+        // This sheet streams install-log lines (frequent re-layout). Sheets
+        // don't reliably inherit the WindowGroup's .progressViewStyle(.forgedbrew),
+        // so re-apply it: otherwise the bare ProgressView() falls back to the
+        // AppKit NSProgressIndicator, which ghosts a grey spinner at the sheet's
+        // top-center. See SecurityScanSheet / ForgedBrewSpinner for the why.
+        .progressViewStyle(.forgedbrew)
     }
 }
 

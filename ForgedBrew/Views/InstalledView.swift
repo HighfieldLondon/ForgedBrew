@@ -408,26 +408,31 @@ enum PackageSortOrder: String, CaseIterable, Identifiable {
     // sort on the display name; install date is newest-first, undated last,
     // tie-broken by name so the order is always stable.
     func sorted(_ packages: [InstalledPackage]) -> [InstalledPackage] {
+        // Decorate-sort-undecorate: compute each package's display name ONCE
+        // (the split/map/join in displayName allocates several strings) and sort
+        // on the precomputed key. The previous form recomputed displayName twice
+        // per comparison — O(N log N) string builds — on every render.
         switch self {
         case .name:
-            return packages.sorted {
-                InstalledRowView.displayName(for: $0.token)
-                    .localizedCaseInsensitiveCompare(InstalledRowView.displayName(for: $1.token)) == .orderedAscending
-            }
+            return packages
+                .map { (pkg: $0, key: InstalledRowView.displayName(for: $0.token)) }
+                .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+                .map(\.pkg)
         case .installDate:
-            return packages.sorted { lhs, rhs in
-                switch (lhs.installedDate, rhs.installedDate) {
-                case let (l?, r?):
-                    if l != r { return l > r }
-                    return InstalledRowView.displayName(for: lhs.token)
-                        .localizedCaseInsensitiveCompare(InstalledRowView.displayName(for: rhs.token)) == .orderedAscending
-                case (_?, nil): return true   // dated before undated
-                case (nil, _?): return false
-                case (nil, nil):
-                    return InstalledRowView.displayName(for: lhs.token)
-                        .localizedCaseInsensitiveCompare(InstalledRowView.displayName(for: rhs.token)) == .orderedAscending
+            return packages
+                .map { (pkg: $0, date: $0.installedDate, key: InstalledRowView.displayName(for: $0.token)) }
+                .sorted { lhs, rhs in
+                    switch (lhs.date, rhs.date) {
+                    case let (l?, r?):
+                        if l != r { return l > r }
+                        return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
+                    case (_?, nil): return true   // dated before undated
+                    case (nil, _?): return false
+                    case (nil, nil):
+                        return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
+                    }
                 }
-            }
+                .map(\.pkg)
         }
     }
 }
@@ -497,17 +502,10 @@ struct InstalledView: View {
     // search. Bound from the shared search field by DetailRouter.
     var searchText: Binding<String> = .constant("")
 
-    // Case-insensitive match of the live search query against a package name or
-    // token. Empty query matches everything.
-    private func matchesSearch(_ pkg: InstalledPackage) -> Bool {
-        let q = searchText.wrappedValue.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return true }
-        return InstalledRowView.displayName(for: pkg.token).lowercased().contains(q)
-            || pkg.token.lowercased().contains(q)
-    }
-
     // Filtered packages based on the segmented type filter AND the page-local
-    // search query.
+    // search query. The search query is normalized ONCE here rather than being
+    // re-trimmed/re-lowercased for every package (which the old per-element
+    // matchesSearch did on every render).
     private var filtered: [InstalledPackage] {
         let byType: [InstalledPackage]
         switch filter.wrappedValue {
@@ -519,7 +517,12 @@ struct InstalledView: View {
             byType = appData.installedPackages
         }
         let byOrigin = byType.filter { originFilter.wrappedValue.matches($0) }
-        return byOrigin.filter(matchesSearch)
+        let q = searchText.wrappedValue.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return byOrigin }
+        return byOrigin.filter { pkg in
+            InstalledRowView.displayName(for: pkg.token).lowercased().contains(q)
+                || pkg.token.lowercased().contains(q)
+        }
     }
 
     // Total installed counts by type, used for the at-a-glance breakdown line
@@ -555,7 +558,15 @@ struct InstalledView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Evaluate the two sorted sections ONCE per render. Each was a computed
+        // property that re-ran the full multi-pass filter + sort on every
+        // access, and the List below reads each one three times (the guard, the
+        // ForEach, and the header count) — so this collapses six full
+        // filter+sort passes per render down to two. Same-name locals shadow the
+        // computed properties so the references below are unchanged.
+        let outdated = self.outdated
+        let upToDate = self.upToDate
+        return VStack(spacing: 0) {
             // Header
             VStack(alignment: .leading, spacing: 2) {
                 // Title row: refresh sits just to the right of the page name

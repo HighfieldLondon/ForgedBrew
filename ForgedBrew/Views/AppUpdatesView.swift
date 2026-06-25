@@ -256,6 +256,16 @@ struct AppUpdatesView: View {
                 .filter(matchesSearch)
         )
 
+        // Resolve each update's matching installed app (for its size + install
+        // date) once, via a single bundle-id map, then hand the result to each
+        // row. Previously every AppUpdateRow linear-scanned service.allApps
+        // twice per body, making the section O(rows × inventory); this is O(1)
+        // per row after one O(inventory) build.
+        let appsByBundleID = Dictionary(
+            service.allApps.map { ($0.bundleID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
         // Updates available
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("Updates available", count: updates.count)
@@ -278,6 +288,7 @@ struct AppUpdatesView: View {
                         AppUpdateRow(
                             update: update,
                             service: service,
+                            inventoryApp: appsByBundleID[update.bundleID],
                             isSelectable: selectable,
                             isSelected: selection.contains(update.bundleID),
                             onToggleSelect: { toggleSelection($0.bundleID) },
@@ -674,6 +685,11 @@ struct AppUpdatesView: View {
 private struct AppUpdateRow: View {
     let update: AppUpdate
     let service: AppUpdateService
+    // The matching installed app from the service's full inventory (AppUpdate
+    // itself carries neither size nor install date), resolved ONCE by the parent
+    // via a bundle-id map and passed in — so the row never linear-scans
+    // service.allApps. nil when no match was found.
+    var inventoryApp: InstalledApp? = nil
     // Whether this row sits in the selectable "Updates available" section on the
     // Updates page (carries a leading multi-select checkbox). Defaults off so
     // the "All apps" / Installed uses of this row are unaffected.
@@ -859,12 +875,6 @@ private struct AppUpdateRow: View {
             }
         }
         .labelStyle(.titleAndIcon)
-    }
-
-    // The matching installed app from the service's full inventory (AppUpdate
-    // itself carries neither size nor install date). nil when not found.
-    private var inventoryApp: InstalledApp? {
-        service.allApps.first { $0.bundleID == update.bundleID }
     }
 
     // The on-disk size for this app, sourced from the service's full inventory

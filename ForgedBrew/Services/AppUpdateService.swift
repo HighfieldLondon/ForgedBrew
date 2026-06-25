@@ -412,7 +412,10 @@ final class AppUpdateService {
     // Privileged delete of a path via `sudo -S rm -rf`, feeding the password on
     // stdin. Runs off the main actor. Returns nil on success or an error string.
     nonisolated static func sudoRemove(path: String, password: String) async -> String? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+        // Once-guard so the terminationHandler, the run-failure path, and the
+        // timeout watchdog can race to resume but only the first wins.
+        let guardOnce = ResumeGuard()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
             process.arguments = ["-S", "-k", "/bin/rm", "-rf", path]
@@ -426,6 +429,7 @@ final class AppUpdateService {
             // Resume via terminationHandler so the continuation body never blocks
             // a cooperative thread.
             process.terminationHandler = { p in
+                guard guardOnce.claim() else { return }
                 if p.terminationStatus == 0 {
                     continuation.resume(returning: nil)
                 } else {
@@ -443,8 +447,27 @@ final class AppUpdateService {
             do {
                 try process.run()
             } catch {
-                continuation.resume(returning: error.localizedDescription)
+                if guardOnce.claim() {
+                    continuation.resume(returning: error.localizedDescription)
+                }
                 return
+            }
+            // Watchdog armed BEFORE the (blocking) stdin write, so even a sudo that
+            // never drains stdin — or a `rm -rf` wedged on a stale network mount —
+            // can't leave this continuation suspended forever. Escalate
+            // SIGTERM → SIGKILL, then force-resume as a last resort.
+            Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(30 * 1_000_000_000))
+                guard process.isRunning else { return }
+                process.terminate()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                if process.isRunning, guardOnce.claim() {
+                    continuation.resume(returning: "The removal timed out and was stopped.")
+                }
             }
             // Feed the password (sudo -S reads it from stdin, newline-terminated).
             let handle = stdinPipe.fileHandleForWriting
@@ -871,9 +894,45 @@ final class AppUpdateService {
 
     // MARK: - Low-level helpers
 
+    // Rejects URLs that aren't a plain remote web fetch: a non-http(s) scheme, or
+    // a host that points back at this machine or a private/link-local network.
+    // The appcast (SUFeedURL) and homepage URLs we fetch come straight from an
+    // arbitrary installed app's Info.plist, so without this a malicious app could
+    // aim them at cloud-metadata (169.254.169.254), localhost services, or
+    // internal hosts (SSRF). Legitimate update feeds always live on public web
+    // hosts, so this never rejects a real one.
+    nonisolated static func isSafeRemoteURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        // Loopback / mDNS / cloud-internal hostnames.
+        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".internal") {
+            return false
+        }
+        // Literal loopback / private / link-local IPv4 ranges.
+        if ["0.", "127.", "10.", "169.254.", "192.168."].contains(where: { host.hasPrefix($0) }) {
+            return false
+        }
+        // 172.16.0.0 – 172.31.255.255 (private).
+        if host.hasPrefix("172.") {
+            let parts = host.split(separator: ".")
+            if parts.count == 4, let second = Int(parts[1]), (16...31).contains(second) {
+                return false
+            }
+        }
+        // IPv6 loopback / link-local (fe80::/10) / unique-local (fc00::/7).
+        if host == "::1" || host.hasPrefix("fe80") || host.hasPrefix("fc") || host.hasPrefix("fd") {
+            return false
+        }
+        return true
+    }
+
     // GET a URL with a browser-like UA and a short timeout. Returns nil on any
     // error or non-2xx. Network only; safe off the main actor.
     nonisolated static func fetch(url: URL) async -> Data? {
+        // SSRF guard: never fetch a non-web scheme or a local/private host (the
+        // URL may have come from an untrusted Info.plist — see isSafeRemoteURL).
+        guard isSafeRemoteURL(url) else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
         // Always pull a fresh feed — a cached appcast would let a just-released
@@ -915,29 +974,7 @@ final class AppUpdateService {
     }
 
     nonisolated static func runProcess(path: String, args: [String]) async -> String? {
-        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = args
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            process.environment = env
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = Pipe()
-            // Resume via terminationHandler so the continuation body never blocks a
-            // cooperative thread. readDataToEndOfFile() is safe to call here because
-            // the process has already closed its write end when the handler fires.
-            process.terminationHandler = { _ in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                cont.resume(returning: String(data: data, encoding: .utf8))
-            }
-            do {
-                try process.run()
-            } catch {
-                cont.resume(returning: nil)
-            }
-        }
+        await launch(path: path, args: args, mergeStderr: false).output
     }
 
     // Like runProcess, but also returns the process exit status and merges
@@ -945,7 +982,39 @@ final class AppUpdateService {
     // successful `mas upgrade` (exit 0) from a failure and surface mas's own
     // error text to the user.
     nonisolated static func runProcessWithStatus(path: String, args: [String]) async -> (output: String?, status: Int32) {
-        await withCheckedContinuation { (cont: CheckedContinuation<(String?, Int32), Never>) in
+        await launch(path: path, args: args, mergeStderr: true)
+    }
+
+    // One-shot resume guard: lets the terminationHandler and the timeout watchdog
+    // race to resume the continuation, with only the first winning (a second
+    // resume of a CheckedContinuation would trap).
+    private final class ResumeGuard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resumed = false
+        func claim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if resumed { return false }
+            resumed = true
+            return true
+        }
+    }
+
+    // Shared process launcher for the small read-only CLIs (`du -sk`, `mas …`).
+    // A watchdog terminates — then SIGKILLs — any process that overruns
+    // `timeout`, so a wedged `du` (e.g. a stale/dead network mount) or a hung
+    // `mas` (stuck on the network) can never leave the awaiting continuation
+    // suspended forever. The terminationHandler resumes on normal/killed exit;
+    // if the process is so wedged that even SIGKILL doesn't reap it promptly
+    // (uninterruptible I/O), the watchdog force-resumes so the caller is never
+    // stranded. A once-guard ensures exactly one resume.
+    private nonisolated static func launch(
+        path: String,
+        args: [String],
+        mergeStderr: Bool,
+        timeout: TimeInterval = 30
+    ) async -> (output: String?, status: Int32) {
+        let guardOnce = ResumeGuard()
+        return await withCheckedContinuation { (cont: CheckedContinuation<(String?, Int32), Never>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = args
@@ -954,17 +1023,47 @@ final class AppUpdateService {
             process.environment = env
             let pipe = Pipe()
             process.standardOutput = pipe
-            process.standardError = pipe   // merge stderr so mas error text is captured
+            // Merge stderr into the same pipe when asked (mas error text); else
+            // discard it down a separate pipe.
+            process.standardError = mergeStderr ? pipe : Pipe()
             // Resume via terminationHandler so the continuation body never blocks a
-            // cooperative thread.
+            // cooperative thread. readDataToEndOfFile() is safe here because the
+            // process has closed its write end by the time the handler fires.
             process.terminationHandler = { p in
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                cont.resume(returning: (String(data: data, encoding: .utf8), p.terminationStatus))
+                if guardOnce.claim() {
+                    cont.resume(returning: (String(data: data, encoding: .utf8), p.terminationStatus))
+                }
             }
             do {
                 try process.run()
             } catch {
-                cont.resume(returning: (error.localizedDescription, -1))
+                // Launch failure (binary missing / not executable). Return a nil
+                // output, NOT the error description: callers like runProcess treat
+                // a non-nil string as real command output and would otherwise parse
+                // the localized error text ("… doesn't exist") as data. Status -1
+                // signals the failure to runProcessWithStatus callers.
+                if guardOnce.claim() {
+                    cont.resume(returning: (nil, -1))
+                }
+                return
+            }
+            // Watchdog: escalate SIGTERM → SIGKILL on a process that overruns the
+            // timeout, then force-resume if it still won't die.
+            Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                guard process.isRunning else { return }   // exited in time
+                process.terminate()                        // SIGTERM
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                // If even SIGKILL hasn't reaped it (rare, uninterruptible I/O),
+                // make sure the awaiting caller isn't left hanging.
+                if process.isRunning, guardOnce.claim() {
+                    cont.resume(returning: (nil, -1))
+                }
             }
         }
     }

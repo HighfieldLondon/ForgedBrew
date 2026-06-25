@@ -31,6 +31,12 @@ struct DiskUsageSheet: View {
             footer
         }
         .frame(width: 560, height: 480)
+        // Sheets don't reliably inherit the WindowGroup's
+        // .progressViewStyle(.forgedbrew), so re-apply it here: otherwise the
+        // bare ProgressView()s fall back to the AppKit NSProgressIndicator,
+        // which ghosts a grey spinner at the sheet's top-center during
+        // re-layout. See SecurityScanSheet / ForgedBrewSpinner for details.
+        .progressViewStyle(.forgedbrew)
     }
 
     // MARK: Header
@@ -48,7 +54,7 @@ struct DiskUsageSheet: View {
                     .foregroundStyle(.secondary)
             }
             // Refresh sits just to the right of the title, matching the main pages.
-            PageRefreshButton("Re-measure", isWorking: metrics.footprintMeasuring, size: .compact) {
+            PageRefreshButton("Re-measure", isWorking: metrics.footprintMeasuring, size: .compact, showsSpinner: false) {
                 Task { await metrics.loadDiskFootprint(cli: cli, caskAppsBytes: caskAppsBytes) }
             }
             Spacer()

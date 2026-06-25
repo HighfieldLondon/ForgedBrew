@@ -28,6 +28,14 @@ struct PageRefreshButton: View {
     let isWorking: Bool
     // Visual size of the control.
     let size: Size
+    // Whether to swap the icon for a spinner while working. Default true. The
+    // Maintenance scan SHEETS pass false: those sheets re-render rapidly as scan
+    // results stream in, and an indeterminate ProgressView inside this button's
+    // label gets pulled out of the button's layout during that churn and drawn
+    // detached at the top of the sheet (the "ghost spinner"). Those sheets show
+    // their own live "Scanning X of N…" progress in the body, so the button just
+    // stays disabled with its static icon — no spinner, no ghost.
+    let showsSpinner: Bool
     // Tap handler.
     let action: () -> Void
 
@@ -36,17 +44,19 @@ struct PageRefreshButton: View {
     init(_ title: String = "Refresh",
          isWorking: Bool,
          size: Size = .regular,
+         showsSpinner: Bool = true,
          action: @escaping () -> Void) {
         self.title = title
         self.isWorking = isWorking
         self.size = size
+        self.showsSpinner = showsSpinner
         self.action = action
     }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if isWorking {
+                if isWorking && showsSpinner {
                     ProgressView()
                         .controlSize(.small)
                 } else {

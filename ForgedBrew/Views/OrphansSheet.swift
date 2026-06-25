@@ -40,6 +40,12 @@ struct OrphansSheet: View {
         // Single definite width (see AdoptSheet) to keep AppKit's layout to one
         // top-down pass.
         .frame(width: 620, height: 560)
+        // Sheets don't reliably inherit the WindowGroup's
+        // .progressViewStyle(.forgedbrew), so re-apply it here: otherwise the
+        // bare ProgressView()s fall back to the AppKit NSProgressIndicator,
+        // which ghosts a grey spinner at the sheet's top-center during
+        // re-layout. See SecurityScanSheet / ForgedBrewSpinner for details.
+        .progressViewStyle(.forgedbrew)
     }
 
     // MARK: Header
@@ -57,7 +63,7 @@ struct OrphansSheet: View {
                     .foregroundStyle(.secondary)
             }
             // Re-scan sits just to the right of the title, matching the main pages.
-            PageRefreshButton("Re-scan", isWorking: busy, size: .compact) {
+            PageRefreshButton("Re-scan", isWorking: busy, size: .compact, showsSpinner: false) {
                 rescan()
             }
             Spacer()

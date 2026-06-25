@@ -1055,13 +1055,23 @@ struct MaintenanceView: View {
                 .padding(.bottom, 20)
             }
         }
+        // NOTE: every sheet below re-applies .progressViewStyle(.forgedbrew).
+        // Sheets are presented in their own hosting context and do NOT reliably
+        // inherit the style set at the WindowGroup root, so without this a bare
+        // ProgressView() falls back to the AppKit NSProgressIndicator, which
+        // "ghosts" a grey spinner at the sheet's top-center during re-layout
+        // (most visible as a scan streams results in). The standalone scan
+        // sheets also set it on their own body; the inline sheets (Brewfile,
+        // Quarantine, Adopt) get it here. See ForgedBrewSpinner for the why.
         .sheet(isPresented: $showBrewfileSheet) {
             BrewfileView(onDone: { showBrewfileSheet = false })
                 .frame(minWidth: 560, minHeight: 520)
+                .progressViewStyle(.forgedbrew)
         }
         .sheet(isPresented: $showQuarantineSheet) {
             QuarantineSheet(metrics: metrics, cli: appData.cli)
                 .frame(minWidth: 520, minHeight: 420)
+                .progressViewStyle(.forgedbrew)
         }
         .sheet(item: $appData.adoptNavigationRequest) { _ in
             // The navigation request is the single source of truth: .sheet(item:)
@@ -1072,6 +1082,7 @@ struct MaintenanceView: View {
             // its own .task, so presentation no longer depends on mount/observer
             // ordering or a separately-toggled flag.
             AdoptSheet(metrics: metrics, casks: appData.casks, managedTokens: managedTokens, appData: appData)
+                .progressViewStyle(.forgedbrew)
         }
         .sheet(isPresented: $showDuplicatesSheet) {
             DuplicatesSheet(metrics: metrics,
@@ -2138,7 +2149,7 @@ struct QuarantineSheet: View {
                 }
                 // Manual re-scan of the quarantine list, just to the right of
                 // the title. Disabled while a scan or removal is in flight.
-                PageRefreshButton("Re-scan", isWorking: busy, size: .compact) {
+                PageRefreshButton("Re-scan", isWorking: busy, size: .compact, showsSpinner: false) {
                     Task { await metrics.loadQuarantinedItems(cli: cli) }
                 }
                 Spacer()
@@ -2371,7 +2382,7 @@ struct AdoptSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             // Re-scan sits just to the right of the title, matching the main pages.
-            PageRefreshButton("Re-scan", isWorking: busy, size: .compact) {
+            PageRefreshButton("Re-scan", isWorking: busy, size: .compact, showsSpinner: false) {
                 Task {
                     await metrics.loadAdoptCandidates(casks: casks, managedTokens: managedTokens, cli: appData.cli, appData: appData)
                 }

@@ -217,9 +217,20 @@ actor BrewAPIService {
         self.decoder = dec
     }
 
-    private func fetch<T: Decodable>(_ url: URL) async throws -> T {
+    // Generic JSON GET. `cachePolicy` overrides the session default
+    // (.returnCacheDataElseLoad) per request. The session default is cache-FIRST,
+    // which is right for the big, slow-changing catalog but serves stale data for
+    // dynamic endpoints (analytics counts, GitHub stars, per-package license /
+    // version / dates). Those callers pass .reloadRevalidatingCacheData so the
+    // cached copy is revalidated against the origin (a cheap conditional GET that
+    // returns 304 when unchanged) instead of being trusted indefinitely.
+    private func fetch<T: Decodable>(
+        _ url: URL,
+        cachePolicy: URLRequest.CachePolicy? = nil
+    ) async throws -> T {
         var request = URLRequest(url: url)
         request.setValue("ForgedBrew/1.0", forHTTPHeaderField: "User-Agent")
+        if let cachePolicy { request.cachePolicy = cachePolicy }
 
         let data: Data
         let response: URLResponse
@@ -329,7 +340,10 @@ actor BrewAPIService {
         guard let url = URL(string: "https://formulae.brew.sh/api/cask/\(token).json") else {
             throw BrewAPIError.invalidURL
         }
-        return try await fetch(url)
+        // Per-cask version/license/dates shown in the detail view change on each
+        // release — revalidate so a reopened detail view isn't stuck on an old
+        // cached copy. Cheap: a 304 when nothing changed.
+        return try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
     }
 
     // Probe the *download* size (bytes) of a cask's primary artifact for
@@ -456,6 +470,11 @@ actor BrewAPIService {
         }
         var request = URLRequest(url: url)
         request.setValue("ForgedBrew/1.0", forHTTPHeaderField: "User-Agent")
+        // Per-formula version/license/dates change on each release; revalidate
+        // rather than inherit the session's cache-first default (which would
+        // serve an indefinitely-stale copy in the detail view). Cheap 304 when
+        // unchanged.
+        request.cachePolicy = .reloadRevalidatingCacheData
 
         let data: Data
         let response: URLResponse
@@ -596,7 +615,8 @@ actor BrewAPIService {
         guard let url = URL(string: urlString) else {
             throw BrewAPIError.invalidURL
         }
-        return try await fetch(url)
+        // Install counts change daily — revalidate rather than trust the cache.
+        return try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
     }
 
     // Mirrors fetchCaskAnalytics for formulae. The formula analytics endpoint
@@ -607,7 +627,8 @@ actor BrewAPIService {
         guard let url = URL(string: urlString) else {
             throw BrewAPIError.invalidURL
         }
-        return try await fetch(url)
+        // Install counts change daily — revalidate rather than trust the cache.
+        return try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
     }
 
     // Fetches (and caches) the full GitHub repo object for a repo URL. Both
@@ -626,7 +647,10 @@ actor BrewAPIService {
         guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)") else {
             throw BrewAPIError.invalidURL
         }
-        let result: GitHubRepo = try await fetch(url)
+        // Stars/license change over time; this is only reached when our own
+        // 1-hour TTL has expired, so revalidate against GitHub rather than let
+        // the URL cache serve an indefinitely-stale /repos response.
+        let result: GitHubRepo = try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
         githubRepoCache[key] = (result, Date())
         return result
     }
@@ -659,7 +683,10 @@ actor BrewAPIService {
             return catalogDateCache[id]?.value
         }
         do {
-            let entries: [GitHubCommitEntry] = try await fetch(url)
+            // Only reached after our disk-cached date TTL expires; revalidate so
+            // the "last updated" date reflects new commits instead of a stale
+            // cached commits response.
+            let entries: [GitHubCommitEntry] = try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
             let iso = entries.first?.commit.committer?.date ?? entries.first?.commit.author?.date
             guard let iso, let date = Self.isoFormatter.date(from: iso) else {
                 return cacheCatalogDate(nil, id: id)
@@ -863,6 +890,12 @@ actor BrewAPIService {
 
         var request = URLRequest(url: url)
         request.setValue("ForgedBrew/1.0", forHTTPHeaderField: "User-Agent")
+        // This URL carries the user's SerpApi key in its query string. Don't let
+        // URLSession persist it to the on-disk URL cache (the session configures a
+        // 50 MB disk cache), where the cache key would be the full key-bearing URL.
+        // Results are still memoized in-process via screenshotSearchCache, so this
+        // doesn't cost an extra request within the TTL.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
 
         let data: Data
         let response: URLResponse
@@ -871,6 +904,11 @@ actor BrewAPIService {
         } catch {
             return []   // network error — don't cache, allow retry
         }
+        // Belt-and-suspenders to the .reloadIgnoringLocalCacheData policy above:
+        // the request cache policy governs reads, not whether the response is
+        // written, so explicitly evict any stored copy. This guarantees the
+        // key-bearing URL never lingers in the on-disk URL cache.
+        session.configuration.urlCache?.removeCachedResponse(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             return []   // auth/quota error — don't cache
         }

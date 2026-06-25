@@ -82,7 +82,7 @@ struct TrustMaintenanceSheet: View {
                     .foregroundStyle(.secondary)
             }
             // Re-scan sits just to the right of the title, matching the main pages.
-            PageRefreshButton("Re-scan", isWorking: busy, size: .compact) {
+            PageRefreshButton("Re-scan", isWorking: busy, size: .compact, showsSpinner: false) {
                 rescan()
             }
             Spacer()
