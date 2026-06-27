@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                                                <item>
+                                                        <item>
+            <title>Version 2.4.1</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.1</h2>
+                <p>Enhanced Trust Management and Homebrew security scanning ahead of Homebrew's September 1, 2026 cask-quarantine change: faster and more accurate scans (no false alarms on large apps, online notarization recognized, saved results with Re-scan, and CVSS severity ratings). Plus other cleanup and refinement: reliable installs from every screen, Cmd-Q quits, more accurate update detection, better search, and a documentation and QA hardening pass.</p>
+            ]]></description>
+            <pubDate>Sat, 27 Jun 2026 17:57:00 +0000</pubDate>
+            <sparkle:version>241</sparkle:version>
+            <sparkle:shortVersionString>2.4.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.1/ForgedBrew.dmg"
+                sparkle:version="241"
+                sparkle:shortVersionString="2.4.1"
+                length="13137282"
+                type="application/octet-stream"
+                sparkle:edSignature="b3TDG74OY5IIBKGRCqhChl9WJC8UyHMqV8dZw1ebCOx2I0pA1dwZNMtxJdh+9OWj2+ulynze0qFvvimWTfRbCA==" />
+        </item>
+        <item>
             <title>Version 2.4.0</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.0</h2>
