@@ -67,6 +67,8 @@ HANDOFF.md
 CLAUDE.md
 SPARKLE-RELEASE.md
 docs/ForgedBrew-GitHub-and-Gatekeeper-Guide.md
+# Claude Code project settings/cache — local-only
+.claude/
 
 # Release/automation scripts — local-only tooling, never published.
 # Contains local paths + identity config; kept out of the public repo.

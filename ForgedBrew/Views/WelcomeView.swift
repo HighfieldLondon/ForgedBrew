@@ -25,6 +25,11 @@ struct WelcomeView: View {
 
     // Whether the `mas` CLI is present. When absent, we offer to install it so
     // ForgedBrew can see Mac App Store apps and their available versions.
+    // - masAvailable: false drives the masSection into view (resolved in .task).
+    // - installingMas: an install is in flight (drives the progress spinner).
+    // - masInstalled: a just-completed install succeeded (shows the green tick
+    //   without immediately hiding the section, which a flip of masAvailable
+    //   alone would do).
     @State private var masAvailable = true
     @State private var installingMas = false
     @State private var masInstalled = false
@@ -127,6 +132,9 @@ struct WelcomeView: View {
         }
     }
 
+    // Installs `mas` via Homebrew. installFormula yields progress events; we
+    // drain the stream to completion, then re-probe the filesystem to confirm
+    // the binary actually landed (the install can fail) before showing success.
     private func installMas() {
         guard !installingMas else { return }
         installingMas = true

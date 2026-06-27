@@ -77,27 +77,28 @@ nonisolated struct AppUpdate: Identifiable, Sendable, Hashable {
     // Optional release-notes link (Sparkle releaseNotesLink / GitHub release).
     let releaseNotesURL: URL?
 
-    // Mac App Store numeric product id (adamID), when known from `mas`. Lets us
-    // (a) attempt a silent `mas upgrade <id>` and (b) deep-link straight to this
-    // app's App Store page (macappstore://apps.apple.com/app/id<storeID>) if the
-    // silent upgrade fails. nil for non-store apps, or store apps mas couldn't
-    // give an id for. Defaulted so existing call sites stay source-compatible.
     // The Homebrew cask token that provides this app, when the cask catalog
     // has a match (homebrewCask-sourced updates always do). Drives the row's
     // "Adopt" button so the user can hand the app to Homebrew for future
     // management instead of relying on a (failing) in-place update. nil ==
     // no matching cask (e.g. Sparkle/GitHub/App Store apps with no cask).
+    // Defaulted so existing call sites stay source-compatible.
     var suggestedToken: String? = nil
 
+    // Mac App Store numeric product id (adamID), when known from `mas`. Lets us
+    // (a) attempt a silent `mas upgrade <id>` and (b) deep-link straight to this
+    // app's App Store page (macappstore://apps.apple.com/app/id<storeID>) if the
+    // silent upgrade fails. nil for non-store apps, or store apps mas couldn't
+    // give an id for.
     var storeID: String? = nil
 
-    // True when we have a concrete newer version than what's installed. App Store
-    // apps with an unknown available version are treated as "possibly outdated"
-    // and surfaced anyway (the store will no-op if already current).
     // True when a Homebrew cask exists for this app, so the row can offer an
     // Adopt action (hand it to Homebrew) in place of a dead in-place update.
     var isAdoptable: Bool { suggestedToken != nil }
 
+    // True when we have a concrete newer version than what's installed. App Store
+    // apps with an unknown available version are surfaced separately (the store
+    // will no-op if already current); this getter only reports a parsed compare.
     var hasKnownNewerVersion: Bool {
         guard let availableVersion else { return false }
         return AppVersion.isNewer(availableVersion, than: installedVersion)
@@ -153,56 +154,81 @@ nonisolated struct ParkedAppUpdate: Codable, Sendable, Hashable, Identifiable {
 // we fall back to a case-insensitive string inequality so a differing version
 // still reads as "an update is available" rather than silently hiding it.
 nonisolated enum AppVersion {
-    // Splits a version string into its leading numeric components. "2.0.1 (4521)"
-    // → [2, 0, 1]; "v1.4.3" → [1, 4, 3]; "26.084.0504" → [26, 84, 504].
-    static func numericComponents(_ version: String) -> [Int] {
-        var comps: [Int] = []
-        // Split on "." and the common build separators — including parentheses
-        // and "+" so a Sparkle/MAS build suffix like "1.4.3 (101)" or "1.4.3+101"
-        // contributes its build number. Take the leading integer of each chunk
-        // (so "0504" → 504).
-        let chunks = version.split(whereSeparator: {
-            $0 == "." || $0 == "-" || $0 == "_" || $0 == " " || $0 == "(" || $0 == ")" || $0 == "+"
-        })
-        for chunk in chunks {
-            // Allow a single leading "v"/"V" version prefix ("v2" → 2) so a
-            // v-prefixed string still contributes its major number, then take the
-            // leading digit run. A chunk that is non-numeric after that (e.g.
-            // "beta", "rc1") contributes nothing but doesn't stop the scan — so a
-            // build-only bump ("1.4.3 (100)" → "1.4.3 (101)", which splits the
-            // build into its own "101" chunk) is still seen as newer, while alpha
-            // pre-release tags don't perturb the ordered numeric compare.
-            var body = Substring(chunk)
-            if let first = body.first, first == "v" || first == "V" {
-                body = body.dropFirst()
-            }
-            var digits = ""
-            for ch in body {
-                if ch.isNumber { digits.append(ch) } else { break }
-            }
-            if digits.isEmpty { continue }
-            // Guard against absurdly long digit runs overflowing Int (which would
-            // silently parse to 0 and invert the comparison): clamp to Int.max.
-            comps.append(Int(digits) ?? Int.max)
-        }
-        return comps
+    // A version split into its MARKETING components (the dotted numbers users
+    // think of as the version) and an optional trailing BUILD number. The build
+    // is whatever follows the FIRST build separator — a space, "(", or "+":
+    //   "2.0.1"        → marketing [2,0,1], build nil
+    //   "2.0.1 (4521)" → marketing [2,0,1], build 4521
+    //   "1.4.3+101"    → marketing [1,4,3], build 101
+    // Keeping them separate is what lets us tell a real PATCH release (2.0 →
+    // 2.0.1: an extra MARKETING component) apart from a pure build-suffix bump
+    // (2.0.1 → "2.0.1 (4521)"). If both were flattened into one numeric array
+    // they'd be indistinguishable, and we'd either conjure a phantom update for
+    // the build suffix or silently MISS the patch release.
+    struct Parsed { var marketing: [Int]; var build: Int? }
+
+    // The leading integer of a chunk, tolerating a single "v"/"V" prefix
+    // ("v2" → 2). nil for a non-numeric chunk ("beta", "rc1"). An absurd digit
+    // run is clamped to Int.max rather than silently overflowing to 0.
+    private static func leadingInt(_ chunk: Substring) -> Int? {
+        var body = chunk
+        if let first = body.first, first == "v" || first == "V" { body = body.dropFirst() }
+        var digits = ""
+        for ch in body { if ch.isNumber { digits.append(ch) } else { break } }
+        if digits.isEmpty { return nil }
+        return Int(digits) ?? Int.max
     }
+
+    static func parse(_ version: String) -> Parsed {
+        // Marketing = everything up to the first build separator; the rest (if
+        // any) is the build suffix.
+        var marketingPart = Substring(version)
+        var buildPart: Substring? = nil
+        if let idx = version.firstIndex(where: { $0 == " " || $0 == "(" || $0 == "+" }) {
+            marketingPart = version[version.startIndex..<idx]
+            buildPart = version[version.index(after: idx)...]
+        }
+        var marketing: [Int] = []
+        for chunk in marketingPart.split(whereSeparator: { $0 == "." || $0 == "-" || $0 == "_" }) {
+            if let n = leadingInt(chunk) { marketing.append(n) }
+        }
+        var build: Int? = nil
+        if let buildPart {
+            for chunk in buildPart.split(whereSeparator: {
+                $0 == "." || $0 == "-" || $0 == "_" || $0 == " " || $0 == "(" || $0 == ")" || $0 == "+"
+            }) {
+                if let n = leadingInt(chunk) { build = n; break }
+            }
+        }
+        return Parsed(marketing: marketing, build: build)
+    }
+
+    // Retained for any caller that just wants the marketing numbers.
+    static func numericComponents(_ version: String) -> [Int] { parse(version).marketing }
 
     // True when `candidate` is strictly newer than `current`.
     static func isNewer(_ candidate: String, than current: String) -> Bool {
-        let a = numericComponents(candidate)
-        let b = numericComponents(current)
-        if a.isEmpty || b.isEmpty {
+        let a = parse(candidate)
+        let b = parse(current)
+        if a.marketing.isEmpty || b.marketing.isEmpty {
             // Can't parse one side numerically — fall back to "different means
             // newer" so we don't hide a real update behind an unparseable string.
             return candidate.compare(current, options: .caseInsensitive) != .orderedSame
         }
-        let count = max(a.count, b.count)
-        for i in 0..<count {
-            let x = i < a.count ? a[i] : 0
-            let y = i < b.count ? b[i] : 0
-            if x != y { return x > y }
+        // Compare the MARKETING components fully, padding the shorter side with 0,
+        // so a genuine patch release with an extra component wins (2.0 < 2.0.1).
+        let n = max(a.marketing.count, b.marketing.count)
+        for i in 0..<n {
+            let ai = i < a.marketing.count ? a.marketing[i] : 0
+            let bi = i < b.marketing.count ? b.marketing[i] : 0
+            if ai != bi { return ai > bi }
         }
-        return false  // equal
+        // Marketing versions are equal. A BUILD number breaks the tie ONLY when
+        // BOTH sides carry one ("2.0.1 (4522)" > "2.0.1 (4521)"); an asymmetric
+        // build suffix ("2.0.1 (4521)" vs "2.0.1") counts as the same version, so
+        // a build-tagged release of an already-installed marketing version doesn't
+        // masquerade as an update.
+        if let ab = a.build, let bb = b.build { return ab > bb }
+        return false
     }
 }

@@ -11,8 +11,8 @@
 import SwiftUI
 
 nonisolated extension TagColor {
-    // The concrete color this token renders as. Uses system colors so the
-    // palette adapts to light/dark mode automatically.
+    /// The concrete color this token renders as. Uses system colors so the
+    /// palette adapts to light/dark mode automatically.
     var color: Color {
         switch self {
         case .blue:   return .blue
@@ -28,8 +28,8 @@ nonisolated extension TagColor {
         }
     }
 
-    // A human-readable label for the color, used as the accessibility label
-    // in the color picker.
+    /// A human-readable label for the color, used as the accessibility label
+    /// in the color picker.
     var displayName: String {
         rawValue.capitalized
     }

@@ -134,6 +134,10 @@ struct OpenCaskIntent: AppIntent {
 
 // MARK: - Shortcuts Provider
 
+// Registers the three intents as ready-made App Shortcuts, each with spoken
+// trigger phrases (\(.applicationName) expands to the app's name), a short
+// title, and an SF Symbol. This is what makes the actions discoverable in the
+// Shortcuts app and invocable by voice via Siri without any user setup.
 struct ForgedBrewShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(

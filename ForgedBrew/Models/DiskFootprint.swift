@@ -41,7 +41,7 @@ nonisolated struct DiskFootprintComponent: Identifiable, Sendable, Hashable {
     // many bundles rather than a single directory).
     let path: String?
 
-    // The five footprint locations, each with display metadata.
+    // The four footprint locations, each with display metadata.
     nonisolated enum Kind: String, Sendable, Hashable, CaseIterable {
         case apps
         case cellar

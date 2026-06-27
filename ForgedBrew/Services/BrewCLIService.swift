@@ -117,6 +117,10 @@ actor BrewCLIService {
         }
     }
 
+    // Absolute path to the `brew` executable, resolved per architecture:
+    // /opt/homebrew on Apple Silicon, /usr/local on Intel. We probe the disk
+    // (rather than rely on $PATH, which a sandboxed GUI app doesn't inherit)
+    // and throw executableNotFound if brew is installed at neither location.
     private var brewPath: String {
         get throws {
             let appleSilicon = "/opt/homebrew/bin/brew"
@@ -127,6 +131,11 @@ actor BrewCLIService {
         }
     }
 
+    // Strips ANSI escape sequences from brew's output. brew colorizes its
+    // progress text (CSI codes: ESC `[` … followed by a color/cursor command
+    // letter — m/G/K/H/F), and those raw control bytes otherwise leak into the
+    // UI's plain-text log and the strings we parse. The regex matches one CSI
+    // sequence; `replacing` removes every occurrence.
     private static func stripANSI(_ string: String) -> String {
         let ansiRegex = /\x1B\[[0-9;]*[mGKHF]/
         return string.replacing(ansiRegex, with: "")
@@ -319,6 +328,32 @@ actor BrewCLIService {
             // we just guarantee teardown. finishStream() is OneShot-guarded, so
             // when EOF already finished the stream this is a no-op.
             process.terminationHandler = { _ in
+                finishStream()
+            }
+
+            // Consumer cancellation path. When the downstream stream is torn down
+            // — window closed mid-install, app teardown, the relay Task in
+            // AppDataService cancelled — the for-await loop stops iterating and
+            // this fires. Without it the brew subprocess would run to completion
+            // in the background, holding the serial brew lock and leaving the
+            // 0600 askpass password file on disk until it happened to exit.
+            //
+            // On `.finished` the process has already exited (that path called
+            // finishStream → continuation.finish), so `process.isRunning` is
+            // false and we only run the OneShot-guarded teardown as a no-op. On
+            // `.cancelled` we actively stop brew: SIGTERM, then SIGKILL after a
+            // grace period if it ignores the polite signal — mirroring the
+            // watchdog in validateSudoPassword and AppUpdateService.launch.
+            // finishStream() is OneShot-guarded, so teardown (clear the
+            // readabilityHandler, wipe the password file, release the lock,
+            // finish the stream) still runs exactly once across every path.
+            continuation.onTermination = { _ in
+                if process.isRunning {
+                    process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    }
+                }
                 finishStream()
             }
 
@@ -573,6 +608,26 @@ actor BrewCLIService {
             } catch {
                 guard finished.fire() else { return }
                 continuation.resume(returning: false)
+            }
+
+            // Watchdog. `sudo -v` is normally instant, but a wedged auth backend
+            // (e.g. a network directory service backing an AD/LDAP admin account)
+            // can hang it indefinitely and strand the password sheet on
+            // "Validating…". This is the only process runner here that previously
+            // lacked a timeout. Terminate, then hard-kill (the terminationHandler
+            // then resumes a rejection); as a last resort force-resume false
+            // ourselves — OneShot-guarded so it can't double-resume — so the caller
+            // can never wait forever. Mirrors the watchdog the other runners use.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+                guard process.isRunning else { return }
+                process.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+                        guard finished.fire() else { return }
+                        continuation.resume(returning: false)
+                    }
+                }
             }
         }
     }
@@ -1097,10 +1152,20 @@ func brewVersion() async throws -> String {
             return AppSecurityResult(
                 token: token, appName: appName, appPath: appPath,
                 codesignValid: false, signingAuthority: nil, teamIdentifier: nil,
-                notarized: false, gatekeeperAccepted: false, gatekeeperSource: nil,
+                notarized: false, notarizationStapled: false,
+                gatekeeperAccepted: false, gatekeeperSource: nil,
                 isAppleSystem: false, scanError: "App bundle not found on disk"
             )
         }
+
+        // Large Electron/web bundles (Teams, the new Outlook, Office, Affinity)
+        // can take 15-30s for spctl/codesign to walk every nested file —
+        // especially cold and while several scan concurrently. A timeout here
+        // must NOT be read as a Gatekeeper rejection, or these healthy apps get
+        // falsely flagged as Trust risks. Give a generous budget and, if it
+        // still doesn't complete, record an inconclusive scanError (a .warn)
+        // instead of a silent "rejected".
+        let assessTimeout: TimeInterval = 45
 
         // 1) Signature validity (exit 0 == valid). We deliberately DON'T pass
         // `--deep`: Apple deprecated --deep for verification, and on large
@@ -1110,16 +1175,21 @@ func brewVersion() async throws -> String {
         // its Designated Requirement — which, combined with the spctl Gatekeeper
         // assessment below, is the trustworthy signal.
         var codesignValid = false
-        if let verify = try? await runExecutableWithStatus(
-            "/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", appPath]
-        ) {
+        var scanError: String? = nil
+        do {
+            let verify = try await runExecutableWithStatus(
+                "/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", appPath],
+                timeout: assessTimeout)
             codesignValid = (verify.status == 0)
+        } catch {
+            scanError = "Signature check didn't complete (large bundle)"
         }
 
         // 2) Signing details — authority, Team ID, notarization ticket, flags.
         var signingAuthority: String? = nil
         var teamIdentifier: String? = nil
         var notarized = false
+        var notarizationStapled = false        // NEW
         var isAppleSystem = false
         if let details = try? await runExecutableWithStatus(
             "/usr/bin/codesign", ["-dv", "--verbose=2", appPath]
@@ -1132,7 +1202,18 @@ func brewVersion() async throws -> String {
                 if signingAuthority == nil, line.hasPrefix("Authority=") {
                     let value = String(line.dropFirst("Authority=".count))
                     signingAuthority = value
-                    if value == "Software Signing" || value.hasPrefix("Apple") {
+                    // Match only Apple's OWN system authorities. The bare
+                    // `hasPrefix("Apple")` was too broad: a third-party leaf CN
+                    // like "Appleseed Co" would match and wrongly mark the app as
+                    // an Apple system binary, which could SUPPRESS a real
+                    // Gatekeeper/Trust warning. Apple's authorities are either
+                    // exactly "Apple" or start with "Apple " (e.g. "Apple Root
+                    // CA", "Apple Worldwide Developer Relations…"). The
+                    // authoritative `source=Apple System` signal from spctl below
+                    // still applies independently.
+                    if value == "Software Signing"
+                        || value == "Apple"
+                        || value.hasPrefix("Apple ") {
                         isAppleSystem = true
                     }
                 } else if line.hasPrefix("TeamIdentifier=") {
@@ -1141,20 +1222,22 @@ func brewVersion() async throws -> String {
                     if value != "not set" && !value.isEmpty { teamIdentifier = value }
                 } else if line.hasPrefix("Notarization Ticket=") {
                     notarized = true
+                    notarizationStapled = true   // NEW: ticket is embedded
                 }
             }
         }
 
         // 3) Gatekeeper assessment (exit 0 == accepted) + source classification.
-        var gatekeeperAccepted = false
-        var gatekeeperSource: String? = nil
         // `--verbose` (level 1) is enough: it prints the accepted/rejected
         // verdict plus a single `source=` line. We avoid `--verbose=4`, which
         // dumps thousands of per-file --prepared/--validated lines for large
         // Electron bundles — needless output that risks stalling the read.
-        if let assess = try? await runExecutableWithStatus(
-            "/usr/sbin/spctl", ["--assess", "--verbose", "--type", "execute", appPath]
-        ) {
+        var gatekeeperAccepted = false
+        var gatekeeperSource: String? = nil
+        do {
+            let assess = try await runExecutableWithStatus(
+                "/usr/sbin/spctl", ["--assess", "--verbose", "--type", "execute", appPath],
+                timeout: assessTimeout)
             gatekeeperAccepted = (assess.status == 0)
             for raw in assess.output.components(separatedBy: "\n") {
                 let line = raw.trimmingCharacters(in: .whitespaces)
@@ -1163,6 +1246,23 @@ func brewVersion() async throws -> String {
                 }
                 if line.contains("source=Apple System") { isAppleSystem = true }
             }
+        } catch {
+            // Inconclusive — DO NOT treat a timeout as a Gatekeeper rejection.
+            if scanError == nil { scanError = "Gatekeeper assessment timed out — verdict unknown" }
+        }
+
+        // An app can be notarized WITHOUT the ticket being stapled into the
+        // bundle — Apple verifies it online instead. `codesign -dv` only prints
+        // a "Notarization Ticket=" line when the ticket is stapled, so apps that
+        // are notarized-but-not-stapled (e.g. Microsoft's direct-download Office
+        // and Edge builds) would otherwise be mis-reported as "not notarized".
+        // spctl is authoritative here: a "Notarized Developer ID" source means
+        // Gatekeeper confirmed notarization. Treat that as notarized too, so the
+        // Security Scan stops showing a false "not notarized" warning on apps the
+        // system actually trusts.
+        if let src = gatekeeperSource,
+           src.localizedCaseInsensitiveContains("Notarized") {
+            notarized = true
         }
 
         return AppSecurityResult(
@@ -1171,10 +1271,11 @@ func brewVersion() async throws -> String {
             signingAuthority: signingAuthority,
             teamIdentifier: teamIdentifier,
             notarized: notarized,
+            notarizationStapled: notarizationStapled,
             gatekeeperAccepted: gatekeeperAccepted,
             gatekeeperSource: gatekeeperSource,
             isAppleSystem: isAppleSystem,
-            scanError: nil
+            scanError: scanError
         )
     }
 
@@ -1578,14 +1679,14 @@ func brewVersion() async throws -> String {
         let severity: String?
     }
 
-    // Parse a CVSS vector string's base-score-relevant pieces is non-trivial;
-    // instead we read the numeric base score when the feed embeds it. CVSS
-    // vectors alone (no score) fall through to string-based severity below.
+    // Resolve a vuln to a severity bucket. Qualitative severity strings take
+    // precedence (they're an authored, human verdict), then we fall back to
+    // computing a CVSS base score from the `severity[]` field.
     nonisolated private static func severity(from vuln: OSVVuln) -> VulnSeverity {
-        // 1) Try a CVSS vector with a parseable base score is rarely present as
-        //    a number; OSV severity scores are vector strings. We can't compute
-        //    a CVSS score without a full calculator, so we look at any embedded
-        //    qualitative severity strings first.
+        // 1) Embedded qualitative severity strings first
+        //    (database_specific / ecosystem_specific). These are an explicit
+        //    rating from the advisory author, so they win over a CVSS-derived
+        //    bucket when present.
         if let dbSev = vuln.databaseSpecific?.severity, !dbSev.isEmpty {
             let mapped = VulnSeverity.fromString(dbSev)
             if mapped != .unknown { return mapped }
@@ -1600,11 +1701,15 @@ func brewVersion() async throws -> String {
                 if mapped != .unknown { return mapped }
             }
         }
-        // 2) A CVSS vector string sometimes encodes nothing we can bucket
-        //    without a calculator; if a numeric-looking score is present in the
-        //    score field, use it.
+        // 2) CVSS `severity[].score`. OSV almost always reports this as a CVSS
+        //    VECTOR STRING (e.g. "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"),
+        //    not a bare number — a plain `Double(...)` was nil for those, which
+        //    collapsed even Critical CVEs to `.unknown`. CVSS.score parses the
+        //    vector and computes the base score (falling back to a bare number
+        //    when one is present), so the bucket reflects real severity. This
+        //    only raises rank accuracy; it never affects vulnerable-vs-clean.
         for sev in vuln.severity ?? [] {
-            if let score = sev.score, let value = Double(score) {
+            if let score = sev.score, let value = CVSS.score(fromOSVScore: score) {
                 return VulnSeverity.fromCVSSScore(value)
             }
         }

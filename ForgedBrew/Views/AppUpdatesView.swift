@@ -82,6 +82,11 @@ struct AppSortMenu: View {
     }
 }
 
+/// The "Mac Store/Other Apps" sidebar screen (and, with `updatesOnly`, its
+/// Updates-only variant). Drives the whole non-Homebrew app surface: scanning,
+/// the category segmented control, the parked section, the per-app rows, the
+/// `mas`-missing prompt, and the multi-select / Update-All batch flows. Reads
+/// its inventory from the shared `AppUpdateService`.
 struct AppUpdatesView: View {
     @Environment(AppDataService.self) private var appData
     @State private var service = AppUpdateService.shared
@@ -530,6 +535,7 @@ struct AppUpdatesView: View {
         .padding(.vertical, 24)
     }
 
+    // "All up to date" card for when the scan finds no pending app updates.
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("All non-Homebrew apps are up to date", systemImage: "checkmark.circle")
@@ -682,6 +688,10 @@ struct AppUpdatesView: View {
 
 // MARK: - Update row
 
+/// One app row in the "Updates available" / "All apps" lists. Shows icon, name,
+/// source badge, version delta, and the per-app actions (Update in place, Open
+/// App, Park, Uninstall, plus a leading checkbox when `isSelectable`). Receives
+/// its matching inventory app (for size + date) pre-resolved by the parent.
 private struct AppUpdateRow: View {
     let update: AppUpdate
     let service: AppUpdateService
@@ -897,14 +907,6 @@ private struct AppUpdateRow: View {
         AppOperationHUD(progress: progress, appStoreUpdate: update, service: service)
     }
 
-    private func hudTint(_ progress: InstallProgress) -> Color {
-        switch progress.phase {
-        case .finished: return .green
-        case .failed:   return .red
-        default:        return .secondary
-        }
-    }
-
     // Performs the in-place update for this app. Prompts once for the session
     // admin password (cancel aborts); mas apps simply never invoke sudo so the
     // password is harmless there.
@@ -922,25 +924,6 @@ private struct AppUpdateRow: View {
                 verb: "update", subject: update.appName
             ) else { return }
             appData.startAppUpdate(update, sudoPassword: password)
-        }
-    }
-
-    // The Website button sends the user where they can get the new version
-    // (App Store page / download URL) — the original behavior, kept alongside
-    // the in-place topgrade Update button.
-    private var websiteButtonTitle: String {
-        switch update.source {
-        case .appStore:     return "Website"
-        case .homebrewCask: return "Website"
-        case .sparkle, .github: return "Website"
-        }
-    }
-
-    private var websiteButtonHelp: String {
-        switch update.source {
-        case .appStore: return "Open the App Store page for \(update.appName)"
-        case .homebrewCask: return "Open \(update.appName)\u{2019}s website to download the update manually"
-        case .sparkle, .github: return "Open the download page for \(update.appName)"
         }
     }
 
@@ -1359,6 +1342,10 @@ private struct AdoptNavButton: View {
     }
 }
 
+/// Trailing trash button for a non-Homebrew app. Confirms, captures the session
+/// admin password (for apps in protected locations), then moves the .app to the
+/// Trash via the service — driving the shared red HUD and asking the parent to
+/// rescan on success. (See the section comment above for the fuller rationale.)
 private struct UninstallAppButton: View {
     let appPath: String
     let appName: String

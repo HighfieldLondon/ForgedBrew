@@ -1,9 +1,9 @@
 import SwiftUI
 import AppKit
 
-// A card outline that stays subtle in dark mode (where the faint fill already
-// separates the card from the background) but becomes clearly visible in light
-// mode, where a near-white fill on a white window would otherwise disappear.
+/// A card outline that stays subtle in dark mode (where the faint fill already
+/// separates the card from the background) but becomes clearly visible in light
+/// mode, where a near-white fill on a white window would otherwise disappear.
 private struct CardStroke: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     var cornerRadius: CGFloat = 12
@@ -32,8 +32,8 @@ private extension View {
     }
 }
 
-// Same light/dark-aware outline as CardStroke, but clipped to a Capsule for
-// status pills (which are near-invisible on a white window in light mode).
+/// Same light/dark-aware outline as CardStroke, but clipped to a Capsule for
+/// status pills (which are near-invisible on a white window in light mode).
 private struct PillStroke: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -60,10 +60,10 @@ private extension View {
     }
 }
 
-// Communicates the Settings context (standalone menu-bar window vs in-app
-// sidebar) down to the shared tab scaffold without threading a flag through
-// every tab. true → menu-bar window (shows the "changes saved automatically"
-// note at the top of each tab).
+/// Communicates the Settings context (standalone menu-bar window vs in-app
+/// sidebar) down to the shared tab scaffold without threading a flag through
+/// every tab. true → menu-bar window (shows the "changes saved automatically"
+/// note at the top of each tab).
 private struct SettingsIsMenuBarWindowKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -74,18 +74,18 @@ extension EnvironmentValues {
     }
 }
 
-// App settings, organized as a tabbed pane. The same view is used in two
-// places (both wired to identical content):
-//   1. The "Settings" row in the sidebar (rendered in the detail area), and
-//   2. The standard macOS Settings window opened with ⌘, / ForgedBrew ▸ Settings…
-//
-// Design split (see #10): the app menu holds COMMANDS (Check for Updates,
-// Settings…) while every PREFERENCE lives here in tabbed Settings. We do not
-// scatter individual toggles across the menu bar.
-//
-// Tabs: General & Updates · App Locations · APIs · About.
-// (A License tab is planned for the trial/licensing work and is intentionally
-// omitted for now.)
+/// App settings, organized as a tabbed pane. The same view is used in two
+/// places (both wired to identical content):
+///   1. The "Settings" row in the sidebar (rendered in the detail area), and
+///   2. The standard macOS Settings window opened with ⌘, / ForgedBrew ▸ Settings…
+///
+/// Design split (see #10): the app menu holds COMMANDS (Check for Updates,
+/// Settings…) while every PREFERENCE lives here in tabbed Settings. We do not
+/// scatter individual toggles across the menu bar.
+///
+/// Tabs: General & Updates · App Locations · APIs · About.
+/// (A License tab is planned for the trial/licensing work and is intentionally
+/// omitted for now.)
 struct SettingsView: View {
     // Optional "done" handler for the in-app (sidebar) context, where there is
     // no separate window to close — the host passes a closure that navigates
@@ -189,8 +189,8 @@ struct SettingsView: View {
 
 // MARK: - Shared card chrome
 
-// Reused container so every tab's sections look identical to the cards the app
-// used before the tabbed redesign.
+/// Reused container so every tab's sections look identical to the cards the app
+/// used before the tabbed redesign.
 private struct SettingsCard<Content: View>: View {
     let title: String
     let systemImage: String
@@ -215,7 +215,9 @@ private struct SettingsCard<Content: View>: View {
     }
 }
 
-// Common scroll + width wrapper so all tabs share padding and max content width.
+/// Common scroll + width wrapper so all tabs share padding and max content width.
+/// Also stamps the privacy badge and the "changes saved automatically" note at
+/// the top of every tab, so no tab needs its own Save affordance.
 private struct SettingsTabScaffold<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
@@ -261,6 +263,10 @@ private struct SettingsTabScaffold<Content: View>: View {
 // control from both tabs is preserved verbatim; they're simply grouped under
 // the same scaffold with their existing section cards acting as headers.
 
+/// The merged "General & Updates" tab. Hosts Appearance, Startup (login item +
+/// Dock/menu-bar toggles backed by StartupSettings), System access (Full Disk
+/// Access, mas, topgrade), ForgedBrew self-update (Sparkle), self-updating-app
+/// detection, and background-refresh scheduling.
 private struct GeneralAndUpdatesSettingsTab: View {
     // --- General (Appearance) state ---
     // Shares the SAME key the sidebar's moon/sun button writes, so the two
@@ -305,6 +311,11 @@ private struct GeneralAndUpdatesSettingsTab: View {
     // menu bar's "Check for Updates…" command uses).
     @Environment(Updater.self) private var updater
 
+    // Persist the dark/light preference AND apply it in the same action. We do
+    // this together (rather than via .onChange) because an @AppStorage write
+    // from the Settings scene doesn't reliably deliver onChange to the sibling
+    // main-window scene — applying here guarantees the appearance flips
+    // regardless of which scene the toggle was clicked in.
     private func setDark(_ value: Bool) {
         isDark = value
         // Apply to every window the app owns so the change takes effect even
@@ -621,8 +632,11 @@ private struct GeneralAndUpdatesSettingsTab: View {
         }
     }
 
-    // Re-probe Full Disk Access and the mas CLI. Cheap (a directory read and a
-    // couple of file-exists checks), so safe to call on every appearance.
+    // NOTE: the two lines above ("Re-probe Full Disk Access…") actually
+    // describe refreshSystemAccess() further down, not intervalLabel — they are
+    // a stray/misplaced doc comment. Left as-is to honor the comments-only,
+    // no-code-change pass; flagged for a future cleanup.
+    //
     // Friendly label for a background-check interval in hours.
     static func intervalLabel(_ hours: Int) -> String {
         switch hours {
@@ -914,7 +928,14 @@ private struct GeneralAndUpdatesSettingsTab: View {
 // upgrades and reboots — see AppLocationSettings, which folds these folders
 // into every scan.
 
+/// The "App Locations" tab: two standard-folder toggles plus a user-managed list
+/// of custom scan folders. Toggles bind via @AppStorage to the SAME keys
+/// AppLocationSettings reads, so the UI and every scan stay in lockstep; the
+/// custom list is stored in the on-disk config (not UserDefaults) and capped at
+/// AppLocationSettings.maxCustomLocations.
 private struct AppLocationsSettingsTab: View {
+    // Bound to AppLocationSettings' keys so flipping a toggle here is the same
+    // setting every scan reads back. Default true → fresh installs scan both.
     @AppStorage(AppLocationSettings.scanSystemApplicationsKey) private var scanSystemApps: Bool = true
     @AppStorage(AppLocationSettings.scanUserApplicationsKey) private var scanUserApps: Bool = true
 
@@ -982,7 +1003,11 @@ private struct AppLocationsSettingsTab: View {
                         .padding(.vertical, 2)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(customLocations.enumerated()), id: \.offset) { index, path in
+                        // Identify rows by their (de-duplicated) path rather than
+                        // array index, so add/remove animates the correct row.
+                        // addLocation() guards against duplicate paths, so the
+                        // path is a stable, unique identity.
+                        ForEach(Array(customLocations.enumerated()), id: \.element) { index, path in
                             HStack(spacing: 8) {
                                 Image(systemName: "folder")
                                     .font(.system(size: 12))
@@ -1095,6 +1120,10 @@ private struct AppLocationsSettingsTab: View {
 
 // MARK: - APIs (optional SerpApi image-search key)
 
+/// The "APIs" tab: an optional SerpApi key that enables web image-search for app
+/// screenshots when an app publishes none on GitHub. The key is written to the
+/// on-disk config (~/.config/forgedbrew/config.json), never UserDefaults, so it
+/// stays local to this Mac and is never bundled with the app.
 private struct APIsSettingsTab: View {
     // The key the user types. Loaded from the on-disk config on appear.
     @State private var keyField: String = ""
@@ -1248,6 +1277,9 @@ private struct APIsSettingsTab: View {
 
 // MARK: - About (license, creator, donate, and User Manual)
 
+/// The "About" tab: app/Homebrew version, license, the privacy promise, a button
+/// to open the in-app User Manual window, and an optional PayPal donation link.
+/// ForgedBrew is free with no license keys or trial, so there is no licensing UI.
 private struct AboutSettingsTab: View {
     @Environment(AppDataService.self) private var appData
     // Opens the standalone, scrollable User Manual window (see UserManualWindowID

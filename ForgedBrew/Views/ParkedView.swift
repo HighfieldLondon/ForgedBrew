@@ -190,6 +190,9 @@ struct ParkedView: View {
 
 // MARK: - ParkedRowView
 
+/// One parked Homebrew package: identity, installed/latest versions, current
+/// park status, an Unpark button, an "update available" hint, and a menu to
+/// re-park with a different park type/duration without leaving the screen.
 struct ParkedRowView: View {
     @Environment(AppDataService.self) var appData
     let record: ParkedApp
@@ -205,6 +208,9 @@ struct ParkedRowView: View {
         return latest != parked
     }
 
+    // Prefer the live installed version; fall back to the version brew recorded
+    // in its outdated report (covers casks whose installedVersion isn't tracked
+    // directly).
     private var installedVersion: String? {
         package?.installedVersion ?? package?.outdatedInfo?.installedVersion
     }
@@ -301,6 +307,9 @@ struct ParkedRowView: View {
             .foregroundStyle(.secondary)
     }
 
+    // Human-readable park status, branching on how the package was parked:
+    // forever, until a newer version ships (noting the held version), or until a
+    // set expiry date.
     private var statusText: String {
         switch record.parkType {
         case .indefinite:

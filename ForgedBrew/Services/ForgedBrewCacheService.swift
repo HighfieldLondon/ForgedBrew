@@ -84,16 +84,16 @@ actor ForgedBrewCacheService {
     }
 
     // Returns cached screenshot file URLs for this token+version if present,
-    // sorted by their numeric index. Empty array means "not cached" — the
-    // caller should fetch. (We intentionally do NOT cache an empty result as a
-    // sentinel here; a token+version with genuinely zero screenshots is handled
-    // by the caller writing a zero-count marker via `markScreenshotsEmpty`.)
+    // sorted by their numeric index. An empty array is ambiguous on its own
+    // (could be "never fetched" or "resolved to zero images"); callers
+    // disambiguate via `hasCachedScreenshotResult`, which checks for the
+    // ".resolved" marker written by `storeScreenshots`.
     func cachedScreenshots(token: String, version: String?) -> [URL] {
         let dir = screenshotDir(token: token, version: version)
         guard fm.fileExists(atPath: dir.path) else { return [] }
 
-        // A ".empty" marker means we already looked and found none — return an
-        // empty array but the caller distinguishes "cached empty" via `hasCachedScreenshotResult`.
+        // Only the numbered "NN.jpg" image files count as screenshots; the
+        // ".resolved" marker (if any) is ignored by the extension filter below.
         let entries = (try? fm.contentsOfDirectory(at: dir,
                                                    includingPropertiesForKeys: nil)) ?? []
         let images = entries
@@ -113,9 +113,10 @@ actor ForgedBrewCacheService {
 
     // Downloads each remote image, downscales + re-encodes to JPEG, and writes
     // the set to this token+version's folder. Older version folders for the
-    // same token are pruned. Writes a ".resolved" marker (skipped when every
-    // candidate download failed, so transient errors dont poison the cache) so we don't re-fetch until the version changes. Returns the
-    // local file URLs in order.
+    // same token are pruned. Writes a ".resolved" marker (only when every
+    // candidate was stored, so a transient failure on any image doesn't poison
+    // the cache with a partial set) so we don't re-fetch until the version
+    // changes. Returns the local file URLs in order.
     @discardableResult
     func storeScreenshots(remoteURLs: [URL],
                           token: String,
@@ -143,18 +144,20 @@ actor ForgedBrewCacheService {
         }
 
         // Write the resolved marker so we skip the network until the cask
-        // version changes — but ONLY when the result is trustworthy. Two cases
-        // are legitimate to cache:
+        // version changes — but ONLY when the result is trustworthy, i.e. EVERY
+        // candidate was stored. Two cases are legitimate to cache:
         //   • there were no candidates at all (nothing to fetch), or
-        //   • we successfully stored at least one image.
-        // If we HAD candidates but every download failed (e.g. a transient DNS
-        // or network hiccup, or a slow render service), we must NOT write the
-        // marker — otherwise a one-time failure poisons the cache as
-        // "resolved-empty" forever and the Screenshots tab stays blank even
-        // though the images are perfectly reachable. Leaving the marker unset
-        // lets the next visit retry the fetch.
-        let everyCandidateFailed = !remoteURLs.isEmpty && localURLs.isEmpty
-        if !everyCandidateFailed {
+        //   • we successfully stored every candidate image.
+        // If even one candidate failed (e.g. a transient DNS or network hiccup,
+        // or a slow render service), we must NOT write the marker — otherwise a
+        // one-time partial failure poisons the cache forever: a "resolved" set
+        // that's missing images, or a "resolved-empty" set when all failed, with
+        // no retry until the version bumps. Leaving the marker unset lets the
+        // next visit retry the missing ones. (This still covers the original
+        // "all failed → don't poison the cache" case, since all-failed is just
+        // the extreme of any-failed.)
+        let allSucceeded = localURLs.count == remoteURLs.count
+        if allSucceeded {
             let marker = dir.appendingPathComponent(".resolved")
             try? Data().write(to: marker)
         }

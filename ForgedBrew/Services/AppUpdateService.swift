@@ -400,9 +400,16 @@ final class AppUpdateService {
                 return sudoError
             }
         }
-        updates.removeAll { $0.bundleID == bundleID }
-        allApps.removeAll { $0.bundleID == bundleID }
-        if parked[bundleID] != nil {
+        // Remove only the row for THIS bundle path. Two installed copies can
+        // legitimately share a bundle id (e.g. the same app in /Applications and
+        // ~/Applications), so keying the removal on bundleID would drop BOTH rows
+        // when the user uninstalled just one. appPath is unique per copy.
+        updates.removeAll { $0.appPath == appPath }
+        allApps.removeAll { $0.appPath == appPath }
+        // Only forget the park state once NO copy of this bundle id remains —
+        // otherwise uninstalling one duplicate would un-park the surviving copy.
+        if parked[bundleID] != nil,
+           !allApps.contains(where: { $0.bundleID == bundleID }) {
             parked[bundleID] = nil
             persistParked()
         }
@@ -904,27 +911,70 @@ final class AppUpdateService {
     nonisolated static func isSafeRemoteURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return false }
-        guard let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        guard var host = url.host?.lowercased(), !host.isEmpty else { return false }
+        // Normalize before matching: a single trailing dot (`localhost.`,
+        // `127.0.0.1.`) still resolves to the same target, and `url.host` may or
+        // may not include the IPv6 brackets — strip both so they can't sneak past.
+        if host.hasSuffix(".") { host.removeLast() }
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        guard !host.isEmpty else { return false }
         // Loopback / mDNS / cloud-internal hostnames.
         if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".internal") {
             return false
         }
-        // Literal loopback / private / link-local IPv4 ranges.
-        if ["0.", "127.", "10.", "169.254.", "192.168."].contains(where: { host.hasPrefix($0) }) {
-            return false
-        }
-        // 172.16.0.0 – 172.31.255.255 (private).
-        if host.hasPrefix("172.") {
-            let parts = host.split(separator: ".")
-            if parts.count == 4, let second = Int(parts[1]), (16...31).contains(second) {
-                return false
-            }
-        }
-        // IPv6 loopback / link-local (fe80::/10) / unique-local (fc00::/7).
-        if host == "::1" || host.hasPrefix("fe80") || host.hasPrefix("fc") || host.hasPrefix("fd") {
-            return false
-        }
+        // Reject any IP LITERAL that points back at this machine or a private /
+        // link-local network — in EVERY textual encoding the OS resolver accepts.
+        // String-prefix checks missed decimal (http://2130706433/ == 127.0.0.1),
+        // hex (0x7f000001), octal (0177.0.0.1), dotted-shorthand (127.1), and
+        // expanded / IPv4-mapped IPv6 (0:0:0:0:0:0:0:1, ::ffff:127.0.0.1). We let
+        // the C resolver parse it instead: inet_aton covers all IPv4 forms,
+        // inet_pton covers canonical IPv6.
+        if isBlockedIPLiteral(host) { return false }
         return true
+    }
+
+    // True when `host` is an IP literal (any encoding) inside a loopback, private,
+    // link-local, unique-local, or unspecified range. Returns false for ordinary
+    // hostnames (which simply don't parse as an IP). Used only by isSafeRemoteURL.
+    private nonisolated static func isBlockedIPLiteral(_ host: String) -> Bool {
+        // IPv4 in any encoding inet_aton accepts (dotted, decimal, hex, octal,
+        // shorthand). s_addr is network byte order → read it back as host order.
+        var v4 = in_addr()
+        if host.withCString({ inet_aton($0, &v4) }) != 0 {
+            return isBlockedIPv4(UInt32(bigEndian: v4.s_addr))
+        }
+        // Canonical IPv6.
+        var v6 = in6_addr()
+        if host.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 {
+            let b = withUnsafeBytes(of: &v6) { Array($0) }   // 16 bytes, network order
+            guard b.count == 16 else { return false }
+            if b.allSatisfy({ $0 == 0 }) { return true }                       // :: unspecified
+            if b[0..<15].allSatisfy({ $0 == 0 }), b[15] == 1 { return true }   // ::1 loopback
+            if b[0] == 0xfe, (b[1] & 0xc0) == 0x80 { return true }             // fe80::/10 link-local
+            if (b[0] & 0xfe) == 0xfc { return true }                           // fc00::/7 unique-local
+            // IPv4-mapped (::ffff:a.b.c.d) / IPv4-compatible (::a.b.c.d): the low
+            // 32 bits carry an embedded IPv4 — check it against the same ranges.
+            if b[0..<10].allSatisfy({ $0 == 0 }),
+               (b[10] == 0xff && b[11] == 0xff) || (b[10] == 0 && b[11] == 0) {
+                let embedded = (UInt32(b[12]) << 24) | (UInt32(b[13]) << 16)
+                            | (UInt32(b[14]) << 8) | UInt32(b[15])
+                if isBlockedIPv4(embedded) { return true }
+            }
+            return false
+        }
+        return false   // not an IP literal — an ordinary hostname, allowed
+    }
+
+    // True when the host-order IPv4 address is in a loopback/private/link-local
+    // range (incl. 169.254.169.254 cloud-metadata, covered by 169.254/16).
+    private nonisolated static func isBlockedIPv4(_ h: UInt32) -> Bool {
+        let b0 = UInt8((h >> 24) & 0xff)
+        let b1 = UInt8((h >> 16) & 0xff)
+        if b0 == 0 || b0 == 127 || b0 == 10 { return true }       // this-host / loopback / private
+        if b0 == 169, b1 == 254 { return true }                    // link-local + cloud metadata
+        if b0 == 192, b1 == 168 { return true }                    // private
+        if b0 == 172, (16...31).contains(b1) { return true }       // private
+        return false
     }
 
     // GET a URL with a browser-like UA and a short timeout. Returns nil on any
@@ -951,8 +1001,6 @@ final class AppUpdateService {
         }
     }
 
-    // Runs a command and returns combined stdout, or nil on failure. Used only
-    // for the `mas` CLI (a tiny, fast read).
     // On-disk size of an .app bundle in bytes, via `du -sk` (kilobytes ×
     // 1024). nil when the path can't be measured. Used to show per-app size
     // on the Mac Store / Other Apps screen.
@@ -973,6 +1021,8 @@ final class AppUpdateService {
         return (attrs?[.creationDate] as? Date) ?? (attrs?[.modificationDate] as? Date)
     }
 
+    // Runs a command and returns combined stdout, or nil on failure. Used for
+    // the small read-only CLIs (`mas …`); discards stderr and the exit status.
     nonisolated static func runProcess(path: String, args: [String]) async -> String? {
         await launch(path: path, args: args, mergeStderr: false).output
     }
@@ -988,7 +1038,13 @@ final class AppUpdateService {
     // One-shot resume guard: lets the terminationHandler and the timeout watchdog
     // race to resume the continuation, with only the first winning (a second
     // resume of a CheckedContinuation would trap).
-    private final class ResumeGuard: @unchecked Sendable {
+    //
+    // `nonisolated` (matching its twin `OneShot` in BrewCLIService): it's used
+    // from the `nonisolated` process runners (sudoRemove, etc.), and without this
+    // the project's default MainActor isolation makes init()/claim() main-actor-
+    // bound — a Swift 6 error, and a warning today. It's a plain lock-guarded flag,
+    // safe to touch from any thread.
+    nonisolated private final class ResumeGuard: @unchecked Sendable {
         private let lock = NSLock()
         private var resumed = false
         func claim() -> Bool {

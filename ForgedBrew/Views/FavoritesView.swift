@@ -1,5 +1,15 @@
 import SwiftUI
 
+// FavoritesView.swift
+//
+// FavoriteButton: the reusable star toggle used on cards and the detail header.
+// FavoritesView: the sidebar destination listing every favorited cask as a grid
+// of AppCardViews.
+
+/// The favorite star. Toggles favorite state for `token` and, on hover, can
+/// show an "Add to favorites" hint positioned to keep the star from shifting —
+/// see the body for the two layout strategies (leading hint on cards,
+/// zero-footprint trailing overlay on the scaled detail-header button).
 struct FavoriteButton: View {
     let token: String
     // When true (and the app is not yet a favorite), show a small inline
@@ -81,6 +91,8 @@ struct FavoriteButton: View {
     }
 }
 
+/// Grid of the user's favorited casks. Reloads on appear and whenever the
+/// global favorite set changes (so un-starring a card here removes it live).
 struct FavoritesView: View {
     @Environment(AppDataService.self) var appData
     @State private var favorites: [CaskMetadata] = []
@@ -126,8 +138,19 @@ struct FavoritesView: View {
                                 installCount: cask.installCount30d,
                                 onTap: { onCaskTapped?($0) },
                                 onInstall: { c in
+                                    // Shared sudo-aware manager (request the session
+                                    // password first; cancel aborts) so a root-
+                                    // requiring install can answer the prompt instead
+                                    // of hanging on the old no-sudo path.
                                     Task {
-                                        for await _ in appData.install(cask: c.token) {}
+                                        guard let password = await appData.ensureSessionSudoPassword(
+                                            verb: "install", subject: c.displayName
+                                        ) else { return }
+                                        appData.startInstall(
+                                            token: c.token,
+                                            isUpgrade: appData.installedByToken[c.token]?.isOutdated ?? false,
+                                            sudoPassword: password
+                                        )
                                     }
                                 }
                             )
@@ -145,6 +168,30 @@ struct FavoritesView: View {
                 await reload()
             }
         }
+        // Admin-password prompt for a root-requiring install — mirrors the other
+        // install surfaces so a favorites-grid install can answer the sudo prompt
+        // instead of silently hanging.
+        .sheet(item: sudoRequestBinding) { request in
+            SudoPasswordSheet(
+                request: request,
+                validate: { await appData.validateSudoPassword($0) }
+            ) { password in
+                appData.provideSudoPassword(password, for: request)
+            }
+        }
+    }
+
+    // Binding over the shared install manager's outstanding sudo request, so the
+    // password sheet presents via `.sheet(item:)`. Nil (dismiss) = cancel.
+    private var sudoRequestBinding: Binding<SudoRequest?> {
+        Binding(
+            get: { appData.pendingSudoRequest },
+            set: { newValue in
+                if newValue == nil, let current = appData.pendingSudoRequest {
+                    appData.provideSudoPassword(nil, for: current)
+                }
+            }
+        )
     }
 
     private func reload() async {

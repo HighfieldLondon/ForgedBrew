@@ -1,5 +1,18 @@
 import SwiftUI
 
+// NotesView.swift
+//
+// The sidebar "Notes & Tags" destination. A single screen with a segmented
+// control switching between two panes:
+//   - Notes pane: every cask the user has written a free-text note for, each as
+//     an inline editor (NoteEditor) with Save / Remove.
+//   - Tags pane (TagsPane): every user-defined tag shown as a card with its
+//     tagged packages listed inline, plus create/edit/delete controls.
+// Notes are cask-only; tags span both casks and formulae.
+
+/// A self-contained editor for one package's note: a tappable header (opens the
+/// app's detail page), a multiline text field, and Save / Remove actions. The
+/// host owns persistence and list refresh via the supplied closures.
 struct NoteEditor: View {
     let token: String
     let displayName: String
@@ -88,11 +101,14 @@ private enum NotesTagsTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Top-level "Notes & Tags" screen. Hosts the segmented Notes/Tags switch and
+/// owns the notes list; the Tags pane manages its own state.
 struct NotesView: View {
     // Opens the detail page for a tapped tagged package. Provided by ForgedBrewApp.
     var onPackageTapped: ((String, PackageType) -> Void)? = nil
 
     @Environment(AppDataService.self) var appData
+    // Casks that have a saved note, reloaded after every save/remove.
     @State private var noted: [NotedCask] = []
     @State private var isLoading = false
     @State private var tab: NotesTagsTab = .notes
@@ -192,6 +208,8 @@ struct NotesView: View {
 
 // Lists all user-defined tags with their item counts. Selecting a tag filters
 // to the packages carrying it. Supports creating, editing, and deleting tags.
+/// The Tags pane: one card per tag, each listing its tagged packages inline
+/// (no expand/collapse). Owns its own tag + tagged-package state.
 private struct TagsPane: View {
     var onPackageTapped: ((String, PackageType) -> Void)? = nil
 

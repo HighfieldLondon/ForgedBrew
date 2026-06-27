@@ -14,6 +14,9 @@ import AppKit
 // so removing a tap NEVER deletes an installed app — it only drops the source
 // repo, and the app keeps running but stops getting updates from that tap.
 
+/// The Taps screen: a searchable, expandable list of the user's Homebrew taps,
+/// with add/remove and per-tap drill-down into the installed packages it
+/// provides.
 struct TapsView: View {
     @Environment(AppDataService.self) private var appData
     // Page-local search, bound from the toolbar field (filters the tap list in
@@ -164,6 +167,10 @@ struct TapsView: View {
 
     // MARK: Tap card
 
+    // One tap rendered as a card: a header row (name, official/third-party
+    // badge, installed-app count, last-commit, Repository/Remove actions) plus,
+    // when expanded, the installed packages sourced from this tap. Official taps
+    // (core/cask) intentionally omit the Remove button.
     @ViewBuilder
     private func tapCard(_ tap: Tap) -> some View {
         let isExpanded = expanded.contains(tap.name)
@@ -323,6 +330,9 @@ struct TapsView: View {
         }
     }
 
+    // Run `brew untap` for the tap, showing a per-row spinner meanwhile. On
+    // failure (most often brew refusing because packages are still installed),
+    // stash the message in removeErrors so it renders inline beneath the tap.
     private func remove(_ tap: Tap) {
         pendingRemove = nil
         removing.insert(tap.name)
@@ -347,6 +357,8 @@ struct TapsView: View {
 
 // MARK: - Add Tap sheet
 
+/// Modal sheet to add a tap. Collects a "user/repo" identifier and hands it to
+/// the host's async add closure; disables Add while empty or in flight.
 private struct AddTapSheet: View {
     @Environment(\.dismiss) private var dismiss
     let onAdd: (String) async -> Void

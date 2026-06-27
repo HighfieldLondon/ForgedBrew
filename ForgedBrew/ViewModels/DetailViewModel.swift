@@ -1,7 +1,24 @@
+//
+//  DetailViewModel.swift
+//  ForgedBrew
+//
+//  Drives the cask/app detail card. Beyond install/uninstall plumbing it owns a
+//  multi-source ENRICHMENT pipeline that lazily resolves, from many fallbacks,
+//  the best available description, long-form text, screenshots, GitHub stars +
+//  license, download size, and the Gatekeeper "trust" banner. The guiding
+//  principle throughout: every tab should show SOMETHING representative rather
+//  than a bare/empty state, and the heavier sources resolve per-tab (with their
+//  own "Loading…" flags) instead of all up front. Install/uninstall themselves
+//  run on the shared, view-independent manager in AppDataService so they survive
+//  navigation away from this page.
+//
+
 import Foundation
 import SwiftUI
 import AppKit
 
+/// The install/uninstall state the detail button + HUD render. Mapped from the
+/// shared install manager's per-token progress in `installState(from:)`.
 enum InstallState: Equatable, Sendable {
     case idle
     case installing
@@ -10,6 +27,7 @@ enum InstallState: Equatable, Sendable {
     case error(String)
 }
 
+/// The segmented tabs on the detail card. Raw values are the visible labels.
 enum DetailTab: String, CaseIterable, Sendable {
     case overview = "Overview"
     // "Detailed Info" sits right after Overview. It shows the project README
@@ -20,10 +38,16 @@ enum DetailTab: String, CaseIterable, Sendable {
     case dependencies = "Dependencies"
 }
 
+/// View model for a single cask's detail card. One instance per opened detail
+/// page; its published state is consumed by the detail view and its tab subviews.
 @MainActor
 @Observable
 final class DetailViewModel {
+    /// The cask being shown. Mutable because enrichment stamps resolved data
+    /// (e.g. cachedLicense) back onto it so cards reflect it without re-fetching.
     var cask: CaskMetadata
+    /// Installed status, mirrored from the shared installed set / DB. Treated as
+    /// upgrade-only on load so a launch race can't clobber a true value (see load).
     var isInstalled: Bool = false
     var installedVersion: String? = nil
     var isOutdated: Bool = false
@@ -322,6 +346,13 @@ final class DetailViewModel {
         return "Casks/\(first)/\(token).rb"
     }
 
+    /// The eager enrichment pass run when the detail page opens. In order:
+    /// reconcile installed status, probe download size (uninstalled apps only),
+    /// resolve the catalog "last updated" date, resolve a GitHub repo and from it
+    /// stars/license/README, fetch homepage metadata, then resolve screenshots.
+    /// The Wikipedia/project-wiki/full-article sources are intentionally left to
+    /// the lazy per-tab loaders. Each step is best-effort: a failure leaves its
+    /// field nil rather than aborting the pass.
     func load(db: DatabaseManager, api: BrewAPIService) async {
         // Flag the WHOLE media-resolution pass as loading up front. We keep this
         // true for the entire load() (not just the screenshot step) because the
@@ -456,10 +487,6 @@ final class DetailViewModel {
         await resolveScreenshots(api: api, repoURL: resolvedRepoURL)
     }
 
-    // Public entry point so the README tab can lazily fetch the repo README if
-    // it is opened and we have neither README text nor an in-flight load (e.g.
-    // load() finished before the README endpoint returned, or it failed). Safe
-    // to call repeatedly; once we have README text or no repo to fetch from,
     // Lazy loader for the Overview tab. Resolves the short description sources
     // that are NOT already in hand from load(): the Wikipedia "about" blurb
     // (Overview's preferred source) and — only if we still have neither a
@@ -482,7 +509,11 @@ final class DetailViewModel {
         overviewResolveCompleted = true
     }
 
-    // it is a no-op. The underlying GitHub fetch is cached in BrewAPIService.
+    // Public entry point so the README tab can lazily fetch the repo README if
+    // it is opened and we have neither README text nor an in-flight load (e.g.
+    // load() finished before the README endpoint returned, or it failed). Once
+    // we have README text or there is no repo to fetch from, it is a no-op. The
+    // underlying GitHub fetch is cached in BrewAPIService.
     func ensureReadmeLoaded(api: BrewAPIService) async {
         guard readme == nil, !readmeLoading, let url = resolvedRepoURL else { return }
         readmeLoading = true

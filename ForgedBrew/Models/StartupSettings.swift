@@ -21,6 +21,12 @@ import AppKit
 // Mac/other apps, parked excluded) shown on the Dock icon — like Messages'
 // unread count. The badge shows whenever a Dock icon exists (permanent, or the
 // temporary one while a window is open). Call updateBadge(count:) on changes.
+
+/// Single source of truth for ForgedBrew's startup / presentation behaviour:
+/// login-item registration, Dock-icon policy, the menu-bar extra, the Dock and
+/// menu-bar update badges, and the headless (menu-bar-only) launch mode. A
+/// @MainActor @Observable singleton (`shared`) so SwiftUI toggles bind straight
+/// to it and AppKit lifecycle code reads the same live state.
 @MainActor
 @Observable
 final class StartupSettings {
@@ -159,6 +165,10 @@ final class StartupSettings {
     }
 
     // Re-reads the live login-item status (call when the Settings pane appears).
+    // The user may have toggled ForgedBrew's login item directly in System
+    // Settings while the app was running, so the in-memory mirror can be stale.
+    // _suppressApply is raised around the write so adopting the system's value
+    // does NOT loop back through applyLaunchAtLogin and re-register/unregister.
     func refreshFromSystem() {
         let enabled = (SMAppService.mainApp.status == .enabled)
         if enabled != launchAtLogin {
@@ -168,8 +178,14 @@ final class StartupSettings {
         }
     }
 
+    // Guards launchAtLogin's didSet: true while we're syncing the property FROM
+    // the system, so those writes don't trigger an SMAppService register call.
     private var _suppressApply = false
 
+    // Registers/unregisters the login item to match the toggle. On failure we
+    // roll the published value back to whatever the system actually reports
+    // (again under _suppressApply) so the UI never shows a state SMAppService
+    // didn't accept — e.g. when the user has denied login items system-wide.
     private func applyLaunchAtLogin(_ enable: Bool) {
         guard !_suppressApply else { return }
         do {
@@ -425,9 +441,11 @@ final class StartupSettings {
 }
 
 // MARK: - Status item action target
-//
-// NSMenuItem actions need an ObjC target. This tiny retained object reopens the
-// main window (showing a temporary Dock icon if Keep in Dock is off) or quits.
+
+/// NSMenuItem actions need an Objective-C target. This tiny retained object (held
+/// by StartupSettings.statusTarget) backs the menu-bar extra's menu items —
+/// reopening the main window (showing a temporary Dock icon if Keep in Dock is
+/// off), running a full refresh, or quitting.
 @MainActor
 final class StatusItemTarget: NSObject {
     @objc func openApp() {

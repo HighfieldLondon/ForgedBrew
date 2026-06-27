@@ -1,5 +1,29 @@
 import Foundation
 
+// MARK: - BrewAPIService
+//
+// All read-only network access to Homebrew's public JSON API (formulae.brew.sh)
+// plus the third-party enrichment sources the detail view layers on top:
+// GitHub (stars / license / README / last-commit date / repo search), ghcr.io
+// (bottle download sizes), Wikipedia (About blurbs + full articles), SerpApi
+// (screenshot image search), and arbitrary homepage HTML (<head> metadata).
+//
+// Design constraints that shape almost everything here:
+//   • Rate limits. The unauthenticated GitHub API allows only ~60 core req/hr
+//     and ~10 search req/min. Several layers of caching (in-memory TTL caches, a
+//     disk-backed catalog-date cache, and a self-imposed request budget) keep us
+//     well under those caps so a session never gets 403'd.
+//   • Best-effort enrichment. Every method beyond the core catalog fetch returns
+//     nil / [] on any failure rather than throwing — enrichment must never break
+//     the detail view. Confident "misses" are cached too, so we don't re-spend a
+//     scarce request on a result we already know is empty.
+//   • Caching correctness. The session is cache-FIRST (right for the big, slow-
+//     changing catalog) but per-package dynamic data (version, license, install
+//     counts) passes .reloadRevalidatingCacheData so a reopened detail view
+//     isn't stuck on a stale copy.
+
+// Errors thrown by the core (throwing) catalog/detail fetches. The many
+// best-effort enrichment methods don't throw — they map failures to nil/[].
 enum BrewAPIError: Error, Sendable {
     case networkError(Error)
     case decodingError(Error)
@@ -273,11 +297,16 @@ actor BrewAPIService {
         githubRequestCount += 1
     }
 
+    // Splits a github.com/<owner>/<repo>/… URL into its owner and repo
+    // components (the first two non-"/" path segments). Returns nil when the URL
+    // has too few path components to be a repo URL.
     private func extractOwnerRepo(from repoURL: URL) -> (owner: String, repo: String)? {
         let parts = repoURL.pathComponents.filter { $0 != "/" }
         guard parts.count >= 2 else { return nil }
         return (parts[0], parts[1])
     }
+
+    // MARK: - Catalog (casks & formulae)
 
     func fetchAllCasks() async throws -> [CaskMetadata] {
         guard let url = URL(string: "https://formulae.brew.sh/api/cask.json") else {
@@ -457,6 +486,59 @@ actor BrewAPIService {
         }
     }
 
+    // Conditional full-formula pull. Mirrors fetchAllCasksConditional: sends
+    // If-None-Match with the supplied ETag and on 304 Not Modified returns
+    // (nil, etag) so the caller can skip the large formula.json parse + DB
+    // rewrite entirely. Uses a PLAIN decoder for the same reason fetchAllFormulas
+    // does (FormulaMetadata's explicit snake_case CodingKeys must match the raw
+    // JSON keys, which the shared .convertFromSnakeCase decoder would break).
+    func fetchAllFormulasConditional(
+        etag: String?
+    ) async throws -> (formulas: [FormulaMetadata]?, etag: String?) {
+        guard let url = URL(string: "https://formulae.brew.sh/api/formula.json") else {
+            throw BrewAPIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.setValue("ForgedBrew/1.0", forHTTPHeaderField: "User-Agent")
+        if let etag, !etag.isEmpty {
+            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw BrewAPIError.networkError(error)
+        }
+
+        let http = response as? HTTPURLResponse
+        let newETag = http?.value(forHTTPHeaderField: "Etag")
+
+        if let http {
+            if http.statusCode == 304 {
+                // Not modified — keep existing DB rows, reuse old ETag.
+                return (nil, etag)
+            }
+            if http.statusCode == 404 { throw BrewAPIError.notFound }
+            if http.statusCode == 403 || http.statusCode == 429 {
+                throw BrewAPIError.rateLimited
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw BrewAPIError.networkError(
+                    NSError(domain: "BrewAPI", code: http.statusCode)
+                )
+            }
+        }
+
+        do {
+            let formulas = try JSONDecoder().decode([FormulaMetadata].self, from: data)
+            return (formulas, newETag ?? etag)
+        } catch {
+            throw BrewAPIError.decodingError(error)
+        }
+    }
+
     // Single-formula detail fetch. The lightweight catalog cache (formulas table)
     // doesn't store dependencies or the HEAD version, so the detail page lazily
     // calls this to enrich what it shows. Like fetchAllFormulas, this uses a
@@ -610,6 +692,8 @@ actor BrewAPIService {
         #endif
     }
 
+    // MARK: - Install analytics
+
     func fetchCaskAnalytics(period: String) async throws -> CaskAnalyticsResponse {
         let urlString = "https://formulae.brew.sh/api/analytics/cask-install/homebrew-cask/\(period).json"
         guard let url = URL(string: urlString) else {
@@ -631,6 +715,8 @@ actor BrewAPIService {
         return try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
     }
 
+    // MARK: - GitHub repo (stars / license / description)
+
     // Fetches (and caches) the full GitHub repo object for a repo URL. Both
     // stars and license are decoded from this one /repos response, so callers
     // for either piece of data share a single request within the TTL.
@@ -651,7 +737,7 @@ actor BrewAPIService {
         // 1-hour TTL has expired, so revalidate against GitHub rather than let
         // the URL cache serve an indefinitely-stale /repos response.
         let result: GitHubRepo = try await fetch(url, cachePolicy: .reloadRevalidatingCacheData)
-        githubRepoCache[key] = (result, Date())
+        storeCapped(result, forKey: key, in: &githubRepoCache, cap: 300)
         return result
     }
 
@@ -772,6 +858,8 @@ actor BrewAPIService {
         return h
     }
 
+    // MARK: - GitHub repo discovery (for apps with no github.com homepage)
+
     private func checkGitHubSearchLimit() throws {
         let now = Date()
         if now.timeIntervalSince(githubSearchWindowStart) > 60 {
@@ -802,7 +890,7 @@ actor BrewAPIService {
         // No homepage host to match against → no confident match possible.
         let caskHost = normalizedHost(homepage)
         guard !caskHost.isEmpty else {
-            githubRepoSearchCache[token] = (nil, Date())
+            storeCapped(nil as URL?, forKey: token, in: &githubRepoSearchCache, cap: 300)
             return nil
         }
 
@@ -817,7 +905,7 @@ actor BrewAPIService {
         let query = "\(appName) in:name"
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://api.github.com/search/repositories?q=\(encoded)&sort=stars&order=desc&per_page=8") else {
-            githubRepoSearchCache[token] = (nil, Date())
+            storeCapped(nil as URL?, forKey: token, in: &githubRepoSearchCache, cap: 300)
             return nil
         }
 
@@ -843,7 +931,7 @@ actor BrewAPIService {
         }
 
         let result = best?.url
-        githubRepoSearchCache[token] = (result, Date())
+        storeCapped(result, forKey: token, in: &githubRepoSearchCache, cap: 300)
         return result
     }
 
@@ -1011,7 +1099,7 @@ actor BrewAPIService {
             .map(\.url)
 
         let final = Array(results)
-        screenshotSearchCache[token] = (final, Date())
+        storeCapped(final, forKey: token, in: &screenshotSearchCache, cap: 200)
         return final
     }
 
@@ -1065,6 +1153,12 @@ actor BrewAPIService {
         return false
     }
 
+    // MARK: - GitHub README
+
+    // Fetches and base64-decodes the repo's default README (the primary "About
+    // this app" source for open-source packages). GitHub returns the README
+    // body base64-encoded in a JSON envelope; we strip the line breaks it
+    // inserts before decoding. Result is TTL-cached (capped) per repo.
     func fetchGitHubReadme(repoURL: URL) async throws -> String {
         guard let (owner, repo) = extractOwnerRepo(from: repoURL) else {
             throw BrewAPIError.invalidURL
@@ -1421,14 +1515,14 @@ actor BrewAPIService {
             return cached.value
         }
         guard let html = await fetchString(url) else {
-            homepageMetaCache[key] = (nil, Date())
+            storeCapped(nil as HomepageMeta?, forKey: key, in: &homepageMetaCache, cap: 300)
             return nil
         }
         let meta = Self.parseHomepageMeta(html: html, baseURL: url)
         // Treat a result with no usable text or image as a miss.
         let usable = (meta.description?.isEmpty == false) || (meta.title?.isEmpty == false) || (meta.imageURL != nil)
         let value: HomepageMeta? = usable ? meta : nil
-        homepageMetaCache[key] = (value, Date())
+        storeCapped(value, forKey: key, in: &homepageMetaCache, cap: 300)
         return value
     }
 
@@ -1493,16 +1587,16 @@ actor BrewAPIService {
             return cached.value
         }
         guard let url = URL(string: "https://github.com/\(owner)/\(repo)/wiki") else {
-            githubWikiCache[key] = (nil, Date()); return nil
+            storeCapped(nil as String?, forKey: key, in: &githubWikiCache, cap: 200); return nil
         }
         guard let html = await fetchString(url) else {
-            githubWikiCache[key] = (nil, Date()); return nil
+            storeCapped(nil as String?, forKey: key, in: &githubWikiCache, cap: 200); return nil
         }
         // Lift the rendered wiki body's text. The wiki content lives in a
         // .markdown-body container; grab its first text paragraphs.
         let blurb = Self.firstParagraphsFromMarkdownBody(html: html)
         let value = (blurb?.isEmpty == false) ? blurb : nil
-        githubWikiCache[key] = (value, Date())
+        storeCapped(value, forKey: key, in: &githubWikiCache, cap: 200)
         return value
     }
 

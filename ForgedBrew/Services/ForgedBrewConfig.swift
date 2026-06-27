@@ -59,13 +59,20 @@ nonisolated struct ForgedBrewConfig: Sendable {
             ?? (json["serpApiApiKey"] as? String)
         let key = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Custom locations: accept an array of strings, drop blanks, normalize.
+        // Custom locations: accept an array of strings, drop blanks, normalize,
+        // and de-duplicate (order-preserving). The file is hand-editable and the
+        // legacy-config migration copies an old file verbatim, so duplicates are
+        // possible — and the Settings list keys its SwiftUI ForEach by the path
+        // string, where duplicate ids would break row identity/removal. Dedupe
+        // here so every consumer (the list AND AppLocationSettings scanning) sees
+        // a unique set.
+        var seenLocations = Set<String>()
         let rawLocations = (json["customAppLocations"] as? [String])
             ?? (json["customScanLocations"] as? [String])
             ?? []
         let locations = rawLocations
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+            .filter { !$0.isEmpty && seenLocations.insert($0).inserted }
 
         return ForgedBrewConfig(
             serpApiKey: (key?.isEmpty == false) ? key : nil,

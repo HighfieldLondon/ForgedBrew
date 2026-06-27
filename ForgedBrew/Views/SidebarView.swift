@@ -1,6 +1,20 @@
 import SwiftUI
 import AppKit
 
+// MARK: - SidebarView
+//
+// The app's primary navigation sidebar (left column of the NavigationSplitView).
+// Renders every top-level destination grouped into sections — Discover, Categories,
+// Formulae, Organization, Installed and Updates, Maintenance — and binds the
+// user's choice back to the parent via `selection: SidebarItem?`. Most rows carry
+// a live count: an accent capsule `badge` for actionable counts (updates waiting)
+// or a muted gray `total` for passive totals (favorites, installed, taps), all
+// sourced from AppDataService / AppUpdateService. The bottom status bar shows the
+// Homebrew version and the light/dark appearance toggle. The reusable row/header
+// components (SidebarSectionHeader, NavRow, CategoryDot, CategoryRow,
+// FormulaeCategoryRow, BottomStatusBar) are defined first; SidebarView itself
+// assembles them at the end.
+
 // Dark-green, bold, slightly larger sidebar section header. Replaces the
 // default small grey uppercase headers so the section names (Discover,
 // Categories, etc.) read clearly. The green is tuned to stay legible on the
@@ -17,6 +31,10 @@ struct SidebarSectionHeader: View {
     }
 }
 
+/// A single tappable navigation entry: SF Symbol icon, label, and an optional
+/// trailing count. The two count slots are semantically distinct — `badge` is the
+/// accent capsule for actionable counts, `total` the muted gray for passive
+/// totals — and a row may show either, both, or neither.
 struct NavRow: View {
     let icon: String
     let label: String
@@ -66,6 +84,9 @@ struct NavRow: View {
     }
 }
 
+/// The small colored dot shown beside each cask category in the sidebar. Each
+/// CaskCategory maps to a fixed hue so categories stay visually distinguishable
+/// at a glance; the same palette is intended to read on the translucent sidebar.
 struct CategoryDot: View {
     let category: CaskCategory
 
@@ -287,6 +308,11 @@ struct FormulaeCategoryRow: View {
     }
 }
 
+/// Pinned footer of the sidebar: a green status dot plus the running Homebrew
+/// version on the left, and the light/dark appearance toggle on the right. The
+/// dark-mode preference is persisted in UserDefaults and applied app-wide (every
+/// window) so an explicit choice overrides the system setting and stays in sync
+/// with the Settings window.
 struct BottomStatusBar: View {
     @Environment(AppDataService.self) var appData
     @AppStorage("forgedbrewPrefersDarkMode") private var isDark: Bool = true
@@ -352,6 +378,9 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
+            // Discover: catalog entry points — the home feed and the curated
+            // popularity views (trending now, 3-month trend, top of the past
+            // year) plus "Browse All". No counts; these are destinations.
             Section(header: SidebarSectionHeader("Discover")) {
                 NavRow(icon: "house", label: "Home", badge: nil, iconColor: Color(red: 0.20, green: 0.45, blue: 0.72))
                     .tag(SidebarItem.home)
@@ -365,12 +394,17 @@ struct SidebarView: View {
                     .tag(SidebarItem.browseAll)
             }
 
+            // Categories: one expandable CategoryRow per cask category, each
+            // drilling into its subcategories. Casks (GUI apps) only.
             Section(header: SidebarSectionHeader("Categories")) {
                 ForEach(CaskCategory.allCases, id: \.self) { cat in
                     CategoryRow(category: cat)
                 }
             }
 
+            // Formulae (CLI tools) live in their own section as a single
+            // expandable row, since they're a flat one-level taxonomy unlike the
+            // category-per-row casks above.
             Section(header: SidebarSectionHeader("Formulae")) {
                 FormulaeCategoryRow()
             }
@@ -393,11 +427,17 @@ struct SidebarView: View {
             Section(header: SidebarSectionHeader("Installed and Updates")) {
                 NavRow(icon: "internaldrive", label: "Installed Homebrew Apps and Formulae", badge: nil, total: installedCount, iconColor: Color(red: 0.22, green: 0.55, blue: 0.34))
                     .tag(SidebarItem.installed)
+                // Indented (leading 16) to read as a child of the Installed row
+                // above it. Carries the accent badge of actionable Homebrew
+                // updates (parked packages already excluded by outdatedCount).
                 NavRow(icon: "arrow.up.circle", label: "Homebrew Updates", badge: outdatedCount > 0 ? outdatedCount : nil, iconColor: Color(red: 0.20, green: 0.45, blue: 0.72))
                     .padding(.leading, 16)
                     .tag(SidebarItem.updates)
                 NavRow(icon: "app.badge", label: "Mac Store/Other Apps", badge: nil, total: macOtherTotal, iconColor: Color(red: 0.22, green: 0.56, blue: 0.66))
                     .tag(SidebarItem.appUpdates)
+                // Indented child of the Mac Store/Other Apps row, mirroring the
+                // Homebrew Installed/Updates pairing above. Badge counts only
+                // apps with an update available and not parked.
                 NavRow(icon: "arrow.up.circle", label: "Mac Store/Other Apps Updates", badge: appUpdateCount > 0 ? appUpdateCount : nil, iconColor: Color(red: 0.22, green: 0.56, blue: 0.66))
                     .padding(.leading, 16)
                     .tag(SidebarItem.appUpdatesOnly)

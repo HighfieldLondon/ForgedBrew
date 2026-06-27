@@ -1,6 +1,17 @@
 import SwiftUI
 import AppKit
 
+// A short "Last scanned <date>" caption for a scan sheet footer. Returns an
+// empty string for a never-run scan (.distantPast) so callers can hide it.
+// Defined once at module scope here and reused by TrustMaintenanceSheet.
+func lastScannedCaption(_ date: Date) -> String {
+    guard date != .distantPast else { return "" }
+    let df = DateFormatter()
+    df.dateStyle = .medium
+    df.timeStyle = .short
+    return "Last scanned \(df.string(from: date))"
+}
+
 // MARK: - SecurityScanSheet
 //
 // The Diagnostics / Security Scan sheet. It runs macOS's own security tooling
@@ -17,7 +28,12 @@ import AppKit
 // AppKit lays out in one pass (avoids _NSDetectedLayoutRecursion); no
 // GeometryReader; one fixed source-of-truth width per row.
 struct SecurityScanSheet: View {
+    // Shared maintenance state hub: owns the live scan counters
+    // (securityScannedCount/TotalCount/CurrentApp), the persisted report +
+    // securityScannedAt timestamp, and loadSecurityScan(...) which streams
+    // per-app verdicts in as each codesign/spctl check completes.
     @Bindable var metrics: MaintenanceMetrics
+    // Used to enumerate the cask-installed app bundles to inspect.
     let cli: BrewCLIService
     @Environment(\.dismiss) private var dismiss
 
@@ -49,12 +65,11 @@ struct SecurityScanSheet: View {
         // root makes everything appear in place with no movement or flicker.
         .transaction { $0.animation = nil }
         .task {
-            // Auto-run the scan the first time the sheet opens so the user sees
-            // results immediately; subsequent opens reuse the cached report
-            // until they tap Re-scan.
-            if !metrics.securityHasScanned && !metrics.securityScanning {
-                await metrics.loadSecurityScan(cli: cli)
-            }
+            // Auto-run the scan when the sheet opens. loadSecurityScan now
+            // self-guards: it reuses the saved report while it's fresh (within
+            // the 24h window) and only re-runs once it's stale, so subsequent
+            // opens show the saved results immediately without re-scanning.
+            await metrics.loadSecurityScan(cli: cli)
         }
     }
 
@@ -73,11 +88,14 @@ struct SecurityScanSheet: View {
                     .foregroundStyle(.secondary)
             }
             // Scan/Re-scan sits just to the right of the title, matching the main pages.
+            // Unlike the auto-run .task (which honours the 24h freshness gate),
+            // the explicit button passes force: true so a deliberate Re-scan
+            // always re-runs, even when the saved report is still fresh.
             PageRefreshButton(metrics.securityHasScanned ? "Re-scan" : "Scan",
                               isWorking: metrics.securityScanning,
                               size: .compact,
                               showsSpinner: false) {
-                Task { await metrics.loadSecurityScan(cli: cli) }
+                Task { await metrics.loadSecurityScan(cli: cli, force: true) }
             }
             Spacer()
             Button("Done") { dismiss() }
@@ -321,6 +339,13 @@ struct SecurityScanSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+            // Timestamp of the saved/just-completed scan, so the user knows how
+            // fresh the results are.
+            if metrics.securityHasScanned {
+                Text(lastScannedCaption(metrics.securityScannedAt))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(16)
     }

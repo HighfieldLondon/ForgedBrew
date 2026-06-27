@@ -1,3 +1,25 @@
+// DetailView.swift
+//
+// The full-page cask detail card, shown when the user opens an app from the
+// catalog, Home, Installed, or Updates. A FIXED header (back button, app
+// icon/name/actions, an upcoming-Homebrew-change trust banner, a five-card stat
+// row, and the tab picker) sits above a SCROLLABLE body; only the selected tab's
+// content scrolls, so the name, action buttons, and tab selector stay visible.
+// A pinned right-hand info sidebar (homepage, version, identifier, category,
+// license, note, tags) lives outside the scroll view.
+//
+// The detail page is the install/uninstall surface: it owns the Install / Update
+// / Installed / Uninstall buttons and renders an inline progress HUD in place of
+// the `brew install` command box while an operation is in flight. Installed
+// state is kept in sync with the shared AppDataService set via several .onChange
+// hooks (see installedStateKey / progressPhaseKey) so the button flips without a
+// reload or restart. Heavier content — README/Overview text, screenshots, the
+// live homepage web view — is resolved lazily and cached by DetailViewModel.
+//
+// This file also defines the detail-only sub-views (AboutView, ReadmeView,
+// ScreenshotsView, the README→blocks Markdown renderer, the homepage web view,
+// the stat card, and the HUD) above the main DetailView type.
+
 import SwiftUI
 import AppKit
 import WebKit
@@ -170,6 +192,9 @@ struct DetailActionButton: View {
     }
 }
 
+/// One bordered tile in the detail card's five-up stat row (Size, Kind,
+/// Version, Last Catalog Update, Status). Pure presentation — the caller
+/// computes the label/value/icon.
 struct StatCard: View {
     let label: String
     let value: String
@@ -1087,6 +1112,9 @@ struct AboutView: View {
     }
 }
 
+/// The Dependencies tab body: a simple list of the cask's required casks, or a
+/// "No dependencies" note. Formula dependencies are surfaced elsewhere (AboutView
+/// "Also installs"), so this only renders the cask `depends_on.cask` list.
 struct DependenciesView: View {
     let caskDeps: [String]?
 
@@ -1115,6 +1143,11 @@ struct DependenciesView: View {
 
 // MARK: - DetailView
 
+/// The full cask detail page. Owns a `DetailViewModel` (seeded from the cask in
+/// `init`), reads shared install state from the injected `AppDataService`, and
+/// composes the fixed header + scrollable tab body + pinned info sidebar
+/// described in the file header. `onBack`, when provided, renders the Back pill
+/// and drives navigation back to the catalog.
 struct DetailView: View {
     let cask: CaskMetadata
     var onBack: (() -> Void)? = nil

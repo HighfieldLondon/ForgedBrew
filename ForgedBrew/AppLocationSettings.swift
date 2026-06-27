@@ -27,6 +27,13 @@ import Foundation
 // services — gets the current setting without wiring up observation. SwiftUI
 // views that want a live toggle bind to the same keys via @AppStorage (see the
 // key constants).
+
+/// App-wide source of truth for which folders ForgedBrew scans for installed
+/// .app bundles: the two standard Applications folders (each toggleable via
+/// UserDefaults, defaulting ON) plus any user-added custom folders (persisted in
+/// the on-disk config). A stateless enum of static helpers read on demand, so
+/// any caller — actor, view, or service — sees the current setting with no
+/// observation wiring.
 nonisolated enum AppLocationSettings {
     // UserDefaults keys. Kept here so the @AppStorage toggles in Settings and
     // the readers in services never drift apart.

@@ -1,6 +1,9 @@
 import SwiftUI
 
 // MARK: - CategoryChip View
+//
+// A single pill-shaped filter chip in the horizontal category row. Tinted with
+// the accent color (white text) when selected, muted otherwise.
 struct CategoryChip: View {
     let label: String
     let isSelected: Bool
@@ -22,125 +25,21 @@ struct CategoryChip: View {
     }
 }
 
-// MARK: - InstallLogSheet View
-//
-// Friendly install progress sheet shown when installing an app from a Browse
-// card. Shows our own plain-language phase (Downloading… / Installing… /
-// Cleaning up… / Done) with a bright-green flowing progress bar — NOT raw brew
-// terminal output — matching the Updates, Installed, and detail-card surfaces.
-// It still takes the same `lines` binding the caller streams into; the raw log
-// is used only to derive the phase and detect completion/failure, never shown.
-struct InstallLogSheet: View {
-    let caskName: String
-    @Binding var lines: [String]
-    @Binding var isPresented: Bool
-
-    // True once the stream finished (the runner appends a "✅ Done" sentinel).
-    private var isDone: Bool {
-        lines.last?.hasPrefix("✅") == true || lines.last?.hasPrefix("❌") == true
-    }
-
-    // A brew "Error: …" line, if the install failed.
-    private var failureMessage: String? {
-        lines.last(where: { $0.localizedCaseInsensitiveContains("error:") })
-    }
-
-    // Current phase, derived from the latest brew ==> marker line. Falls back to
-    // "Preparing…" until brew emits its first marker.
-    private var phaseLabel: String {
-        for line in lines.reversed() {
-            if let phase = InstallProgress.phase(forLine: line) { return phase.statusLabel }
-        }
-        return "Preparing…"
-    }
-
-    private var phaseSymbol: String {
-        for line in lines.reversed() {
-            if let phase = InstallProgress.phase(forLine: line) { return phase.statusSymbol }
-        }
-        return "hourglass"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(isDone
-                     ? (failureMessage != nil ? "\(caskName) failed" : "\(caskName) is ready")
-                     : "Installing \(caskName)")
-                    .font(.headline)
-                Spacer()
-                Button("Close") { isPresented = false }
-                    .disabled(!isDone)
-            }
-
-            // Live phase line + green flowing bar while the install runs.
-            if !isDone {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .frame(width: 14, height: 14)
-                        Image(systemName: phaseSymbol)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.accentColor)
-                        Text(phaseLabel)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Color.accentColor)
-                        Spacer(minLength: 0)
-                    }
-                    GreenDashProgressBar()
-                        .frame(height: 4)
-                }
-            } else if let failureMessage {
-                // Red failure banner with the brew error.
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                        .font(.system(size: 14))
-                    Text(failureMessage)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                }
-            } else {
-                // Success state.
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.system(size: 16))
-                    Text("Installed successfully.")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 0)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .frame(width: 460, height: 200)
-        // This sheet streams install-log lines (frequent re-layout). Sheets
-        // don't reliably inherit the WindowGroup's .progressViewStyle(.forgedbrew),
-        // so re-apply it: otherwise the bare ProgressView() falls back to the
-        // AppKit NSProgressIndicator, which ghosts a grey spinner at the sheet's
-        // top-center. See SecurityScanSheet / ForgedBrewSpinner for the why.
-        .progressViewStyle(.forgedbrew)
-    }
-}
-
 // MARK: - BrowseView
+//
+// The catalog browser: a scope tab bar + category chip row pinned at the top,
+// over a scrolling grid of AppCardViews driven by BrowseViewModel. The grid
+// renders one of three ways — a flat paged grid (capped with "Load More"), a
+// sub-grouped grid (per-subcategory sections under pinned headers), or the
+// loading/empty states. Tapping a card opens its detail page; the bulk of the
+// non-obvious code here is scroll-position restore so returning from that detail
+// page lands back on the exact card (see scrolledID and converge(...)). Cards can
+// also kick off an install via the shared, sudo-aware install manager.
 struct BrowseView: View {
     @Bindable var viewModel: BrowseViewModel
     @Environment(AppDataService.self) var appData
     // Called when a card is tapped; the parent presents the detail page.
     var onCaskTapped: ((CaskMetadata) -> Void)?
-
-    // Install sheet state
-    @State private var showInstallSheet = false
-    @State private var installSheetCask: CaskMetadata? = nil
-    @State private var installLog: [String] = []
-    @State private var installTask: Task<Void, Never>? = nil
 
     // Live scroll position, tracked by .scrollPosition(id:). Kept in LOCAL state
     // (never written into the @Observable view model during layout — that was
@@ -151,6 +50,8 @@ struct BrowseView: View {
     // correctly even when the target card is several lazy pages down.
     @State private var scrolledID: CaskMetadata.ID? = nil
 
+    // Adaptive grid: as many ~190–280pt-wide card columns as fit the width.
+    // Shared by both the flat and sub-grouped grids so card sizing stays uniform.
     private let gridColumns = [
         GridItem(.adaptive(minimum: 190, maximum: 280), spacing: 12)
     ]
@@ -202,13 +103,15 @@ struct BrowseView: View {
         .task {
             await viewModel.load(db: appData.db)
         }
-        .sheet(isPresented: $showInstallSheet) {
-            if let cask = installSheetCask {
-                InstallLogSheet(
-                    caskName: cask.displayName,
-                    lines: $installLog,
-                    isPresented: $showInstallSheet
-                )
+        // Admin-password prompt for an install that needs root — mirrors the
+        // detail card / Installed / Updates sheets so a card-grid install can
+        // actually answer the sudo prompt instead of hanging.
+        .sheet(item: sudoRequestBinding) { request in
+            SudoPasswordSheet(
+                request: request,
+                validate: { await appData.validateSudoPassword($0) }
+            ) { password in
+                appData.provideSudoPassword(password, for: request)
             }
         }
     }
@@ -484,18 +387,39 @@ struct BrowseView: View {
         }
     }
 
+    // Begins an install from a card's "Install" button via the SHARED install
+    // manager (appData.startInstall), the same sudo-aware path the detail card
+    // uses: the session admin password is requested first (cancel aborts), the
+    // install survives navigation, and progress shows on the Installed / Updates
+    // screens. The previous `appData.install(cask:)` path supplied NO password
+    // and bound no prompt, so a cask needing root (e.g. a .pkg install) hung
+    // forever behind a sudo prompt that no UI could answer — and the old install
+    // sheet's Close button stayed disabled, trapping the user.
     private func startInstall(_ cask: CaskMetadata) {
-        installSheetCask = cask
-        installLog = []
-        showInstallSheet = true
-        installTask?.cancel()
-        installTask = Task {
-            let stream = appData.install(cask: cask.token)
-            for await line in stream {
-                await MainActor.run { installLog.append(line) }
-            }
-            await MainActor.run { installLog.append("✅ Done") }
+        Task {
+            guard let password = await appData.ensureSessionSudoPassword(
+                verb: "install", subject: cask.displayName
+            ) else { return }
+            appData.startInstall(
+                token: cask.token,
+                isUpgrade: appData.installedByToken[cask.token]?.isOutdated ?? false,
+                sudoPassword: password
+            )
         }
+    }
+
+    // Binding over the shared install manager's outstanding sudo request, so the
+    // password sheet presents via `.sheet(item:)`. Setting it to nil (sheet
+    // dismiss) is treated as a cancel and clears the queued operation.
+    private var sudoRequestBinding: Binding<SudoRequest?> {
+        Binding(
+            get: { appData.pendingSudoRequest },
+            set: { newValue in
+                if newValue == nil, let current = appData.pendingSudoRequest {
+                    appData.provideSudoPassword(nil, for: current)
+                }
+            }
+        )
     }
 }
 

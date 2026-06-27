@@ -1,5 +1,21 @@
 import SwiftUI
 
+// MARK: - SearchResultsView
+//
+// The unified search results screen, shown when the user types a query into the
+// toolbar search field. It searches BOTH catalogs and presents them as two
+// grouped sections — "Apps & Casks" and "Formulae". Casks are searched by the
+// view model (SQLite FTS, or an in-memory filter over the seeded catalog when a
+// category scope is active); formulae are filtered directly in-memory here since
+// the whole formula catalog is already loaded. A search can be SCOPED to the
+// category the user was browsing when they searched; the header offers toggles to
+// widen to the whole catalog ("Search all apps") or re-scope. The row views
+// (SearchResultRow, FormulaSearchResultRow) are defined first, then the screen.
+
+/// One cask/app search result row: icon, name, token + category pill, one-line
+/// description, and a trailing action button whose label and behavior depend on
+/// install state — "Get" opens the detail page, "Update" upgrades in place, and
+/// "Installed" is shown disabled when already up to date.
 struct SearchResultRow: View {
     let cask: CaskMetadata
     let isInstalled: Bool
@@ -16,7 +32,7 @@ struct SearchResultRow: View {
             AppIconView(token: cask.token, displayName: cask.displayName, homepage: cask.homepage, size: 44)
 
             VStack(alignment: .leading, spacing: 3) {
-                highlightedName
+                nameLabel
 
                 HStack(spacing: 6) {
                     Text(cask.token)
@@ -67,9 +83,8 @@ struct SearchResultRow: View {
         .contentShape(Rectangle())
     }
 
-    // Attempts to create an AttributedString with the first occurrence of queryText highlighted bold.
-    // Falls back to plain Text if AttributedString creation fails.
-    private var highlightedName: some View {
+    // The result's display name, rendered as plain semibold Text.
+    private var nameLabel: some View {
         Text(cask.displayName)
             .font(.system(size: 13, weight: .semibold))
             .lineLimit(1)
@@ -198,7 +213,10 @@ struct SearchResultsView: View {
 
             Divider()
 
-            // Main content
+            // Main content, branched on search state: too-short query → hint;
+            // searching → spinner; no matches → empty state (with a "search all"
+            // escape hatch when the miss was due to a category scope); otherwise
+            // the two grouped result sections.
             if query.count < 2 {
                 centeredHint("Keep typing…", icon: "magnifyingglass")
             } else if viewModel.isLoading {
@@ -233,7 +251,22 @@ struct SearchResultsView: View {
                                     isInstalled: installed != nil,
                                     isOutdated: installed?.isOutdated ?? false,
                                     onInstall: {
-                                        Task { for await _ in appData.install(cask: cask.token) {} }
+                                        // "Update" on an outdated installed cask.
+                                        // Route through the SHARED sudo-aware manager
+                                        // (request the session password first; cancel
+                                        // aborts) so a root-requiring upgrade can
+                                        // answer the prompt instead of hanging on the
+                                        // old no-sudo path.
+                                        Task {
+                                            guard let password = await appData.ensureSessionSudoPassword(
+                                                verb: "update", subject: cask.displayName
+                                            ) else { return }
+                                            appData.startInstall(
+                                                token: cask.token,
+                                                isUpgrade: true,
+                                                sudoPassword: password
+                                            )
+                                        }
                                     },
                                     onOpen: { onCaskTapped?(cask) }
                                 )
@@ -289,6 +322,31 @@ struct SearchResultsView: View {
         }
         // A brand-new scope (navigated to a different category) re-scopes.
         .onChange(of: scopeCategory) { _, _ in searchEverything = false }
+        // Admin-password prompt for a root-requiring update — mirrors the detail
+        // card / Updates sheets so an in-place update from a search row can
+        // answer the sudo prompt instead of silently hanging.
+        .sheet(item: sudoRequestBinding) { request in
+            SudoPasswordSheet(
+                request: request,
+                validate: { await appData.validateSudoPassword($0) }
+            ) { password in
+                appData.provideSudoPassword(password, for: request)
+            }
+        }
+    }
+
+    // Binding over the shared install manager's outstanding sudo request, so the
+    // password sheet presents via `.sheet(item:)`. Setting it to nil (dismiss) is
+    // treated as a cancel and clears the queued operation.
+    private var sudoRequestBinding: Binding<SudoRequest?> {
+        Binding(
+            get: { appData.pendingSudoRequest },
+            set: { newValue in
+                if newValue == nil, let current = appData.pendingSudoRequest {
+                    appData.provideSudoPassword(nil, for: current)
+                }
+            }
+        )
     }
 
     // Filters the in-memory formula catalog by name / full name / description,

@@ -1,5 +1,24 @@
+//
+//  CaskMetadata.swift
+//  ForgedBrew
+//
+//  The core catalog DTO for a Homebrew cask (a macOS app), decoded from the
+//  formulae.brew.sh JSON API and persisted into the local SQLite catalog. One
+//  `CaskMetadata` backs every browse/search card and the detail view. Beyond
+//  the raw wire fields it carries derived presentation helpers (display name,
+//  GitHub repo recovery, license/open-source signals, and a category/subcategory
+//  delegated to CaskClassifier), plus a runtime-only `cachedLicense` stamped on
+//  from a separate GitHub metadata cache.
+//
+//  `nonisolated` + Sendable throughout so catalog values can cross from the
+//  background fetch/DB actors up to the @MainActor UI.
+//
+
 import Foundation
 
+/// The app's top-level browse category for a cask. The declaration order below
+/// is also the display order (the sidebar and the category chip bar both iterate
+/// `allCases`), so reordering cases reorders the UI.
 nonisolated enum CaskCategory: String, CaseIterable, Codable, Sendable {
     // Display order (matches the sidebar + top category chip bar, since both
     // iterate `allCases`). Sorted roughly by size/importance, with `other`
@@ -76,6 +95,9 @@ nonisolated enum CaskCategory: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// The macOS version constraint inside a cask's `depends_on`. The single wire
+/// key is the literal operator string `">="`, mapped here so it forms a valid
+/// Swift identifier; the array holds the minimum supported OS version(s).
 nonisolated struct CaskMacOSRequirement: Codable, Sendable {
     let greaterThanOrEqualTo: [String]?
 
@@ -84,26 +106,50 @@ nonisolated struct CaskMacOSRequirement: Codable, Sendable {
     }
 }
 
+/// A cask's `depends_on` block: an optional minimum-macOS requirement and an
+/// optional list of other cask tokens this cask requires.
 nonisolated struct CaskDependsOn: Codable, Sendable {
     let macos: CaskMacOSRequirement?
     let cask: [String]?
 }
 
+/// One Homebrew cask as seen in the catalog. Identity is the `token` (its unique
+/// Homebrew identifier), which also drives `Hashable`/`Equatable` and `id`.
 nonisolated struct CaskMetadata: Codable, Sendable, Identifiable, Hashable {
+    /// Unique Homebrew cask identifier, e.g. "google-chrome" (wire key `token`).
     let token: String
+    /// Display name(s) from the API (`name`). Usually one entry; `displayName`
+    /// uses the first. May hold aliases for apps known under several names.
     let name: [String]
+    /// One-line description (`desc`). nil when the cask provides none.
     let desc: String?
+    /// Vendor/project homepage (`homepage`). Primary GitHub-repo recovery source
+    /// (see `githubURL`) and the classifier's homepage signal.
     let homepage: String?
     // The cask's download/artifact URL (formulae JSON `url`). Often a GitHub
     // releases URL even when the homepage is a vendor site, so it's a strong
     // secondary signal for recovering the source repo (see githubURL).
     let downloadURL: String?
+    /// Latest catalog version string (`version`), e.g. "126.0.1". nil when the
+    /// cask uses `:latest` (an undated rolling release).
     let version: String?
+    /// Whether the app updates itself (`auto_updates`), so Homebrew won't manage
+    /// its version. nil when the cask doesn't declare it.
     let autoUpdates: Bool?
+    /// Whether Homebrew has deprecated this cask (`deprecated`). Defaults to
+    /// false when the key is absent (see the decode init).
     let deprecated: Bool
+    /// Git HEAD SHA of the tap the cask came from (`tap_git_head`). Provenance
+    /// metadata; nil when not provided.
     let tapGitHead: String?
+    /// The cask's `depends_on` block (min macOS + required casks), if any.
     let dependsOn: CaskDependsOn?
+    /// Path to the cask's defining Ruby file within its tap (`ruby_source_path`),
+    /// e.g. "Casks/g/google-chrome.rb". Provenance metadata; nil when absent.
     let rubySourcePath: String?
+    /// 30-day install count (the default popularity sort signal). Populated from
+    /// Homebrew analytics and persisted in the DB; defaults to 0 when absent so
+    /// the API decode path stays safe.
     let installCount30d: Int
     // 90-day install count (the "3-Month Trend" sort signal). Like the 30d
     // count it is populated from Homebrew analytics and persisted in the DB;
@@ -171,6 +217,11 @@ nonisolated struct CaskMetadata: Codable, Sendable, Identifiable, Hashable {
         self.cachedLicense = cachedLicense
     }
 
+    // Hand-written Codable (rather than synthesized) for one reason: the
+    // runtime-only `cachedLicense` must be kept out of the wire/DB representation
+    // — it's absent from CodingKeys, decodes to nil, and is never encoded. The
+    // decode side also supplies the deprecated/installCount defaults so a payload
+    // missing those keys still decodes cleanly.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.token = try container.decode(String.self, forKey: .token)

@@ -11,9 +11,13 @@ struct HomebrewStatusBanner: View {
     @Bindable var metrics: MaintenanceMetrics
     let cli: BrewCLIService
 
+    // Convenience reads of the shared MaintenanceMetrics state. The banner is a
+    // pure projection of these three flags into title/subtitle/icon/button.
     private var installed: String? { metrics.brewInstalledVersion }
     private var loading: Bool { metrics.brewVersionLoading }
     private var updating: Bool { metrics.brewUpdating }
+    // "Not installed" only once the version probe has finished (not loading) and
+    // still found nothing -- so we don't flash a scary "missing" state mid-check.
     private var notInstalled: Bool { !loading && installed == nil }
 
     private var iconName: String {
@@ -24,6 +28,8 @@ struct HomebrewStatusBanner: View {
         notInstalled ? .secondary : .blue
     }
 
+    // Title carries the detected version when known; a bare "Homebrew" stands in
+    // while still checking or when brew is absent.
     private var title: String {
         guard let installed else { return "Homebrew" }
         return "Homebrew \(installed)"

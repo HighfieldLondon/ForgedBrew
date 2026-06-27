@@ -20,6 +20,9 @@ struct OrphansSheet: View {
     let cli: BrewCLIService
     @Environment(\.dismiss) private var dismiss
 
+    // True while ANY orphan operation is in flight — a scan, a single-package
+    // removal, or the Remove-All autoremove run. Drives the header Re-scan
+    // button's working state so the user can't kick off overlapping brew calls.
     private var busy: Bool {
         metrics.orphansScanning
             || !metrics.removingOrphanTokens.isEmpty

@@ -11,6 +11,10 @@ import SwiftUI
 //   • "AppKitProgressView … maximum length (32.14…) doesn't satisfy min <= max"
 // Drawing the spinner ourselves with SwiftUI shapes removes the AppKit host
 // entirely, so the warnings disappear and sizing is deterministic.
+
+/// App-wide replacement for the system circular ProgressView. Apply via
+/// `.progressViewStyle(.forgedbrew)`; renders an indeterminate spinning arc or,
+/// when a fraction is reported, a determinate fill ring.
 struct ForgedBrewSpinnerStyle: ProgressViewStyle {
     // Diameter of the spinner in points.
     var size: CGFloat = 20

@@ -1,7 +1,27 @@
 import SwiftUI
 
+// MARK: - InstalledView (file overview)
+//
+// The "Installed Homebrew Apps and Formulae" screen. Lists every package brew
+// reports as installed, split into two sorted sections — "Updates Available" and
+// "Up to Date" — with per-row Update / Park / Uninstall actions wired through the
+// shared install manager on AppDataService (so operations survive navigation and
+// auto-refresh installed state on finish). Three persisted filters narrow the
+// list: type (casks / formulae / all), origin (all / installed by me /
+// dependencies), and sort order (name / install date); a page-local search box
+// filters in place. This file defines, top to bottom: the row view
+// (InstalledRowView), the filter/sort enums (InstalledFilter, OriginFilter,
+// PackageSortOrder), the shared sort control (PackageSortMenu), and finally the
+// screen itself (InstalledView).
+
 // MARK: - InstalledRowView
 
+/// One installed-package row: icon, name, token + version (or "old → new" when
+/// outdated), badges (parked / dependency), optional inline dependency list and
+/// size/date metadata, a live progress line while an operation runs, and the
+/// trailing Update / Park / Unpark / Uninstall actions. The row only *requests*
+/// destructive/parking actions via its closures; the parent owns confirmation
+/// and execution.
 struct InstalledRowView: View {
     let package: InstalledPackage
     // The formula dependencies to show inline beneath the name row, supplied by

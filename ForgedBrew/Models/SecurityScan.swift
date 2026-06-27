@@ -94,7 +94,11 @@ nonisolated enum SecurityCheckStatus: String, Sendable, Hashable {
 
 // MARK: - Per-app result
 
-nonisolated struct AppSecurityResult: Identifiable, Sendable, Hashable {
+// Codable so a completed scan can be cached on disk and reloaded on relaunch
+// (security scans shell out to codesign/spctl per app and are slow to recompute);
+// the synthesized coding covers every stored field, and the derived verdicts are
+// computed, so nothing scan-specific needs to be persisted beyond these.
+nonisolated struct AppSecurityResult: Identifiable, Sendable, Hashable, Codable {
     var id: String { token }
 
     // The cask token (e.g. "bitwarden") and the human-facing app name derived
@@ -117,6 +121,11 @@ nonisolated struct AppSecurityResult: Identifiable, Sendable, Hashable {
     let teamIdentifier: String?
     // Was a notarization ticket found stapled to the bundle?
     let notarized: Bool
+    // True only when a notarization ticket is STAPLED into the bundle. When
+    // `notarized` is true but this is false, notarization was confirmed online
+    // by Gatekeeper (spctl source = "Notarized Developer ID") rather than
+    // stapled — still fully valid, just not embedded in the bundle.
+    let notarizationStapled: Bool
     // Did Gatekeeper (`spctl --assess --type execute`) accept the app?
     let gatekeeperAccepted: Bool
     // Gatekeeper's source classification, e.g. "Notarized Developer ID" or
@@ -204,6 +213,9 @@ nonisolated struct AppSecurityResult: Identifiable, Sendable, Hashable {
                 return "Signed by Apple and accepted by Gatekeeper."
             }
             let who = teamIdentifier.map { " (Team \($0))" } ?? ""
+            if notarized && !notarizationStapled {
+                return "Signed, notarized by Apple (verified online), and accepted by Gatekeeper\(who)."
+            }
             return "Signed, notarized, and accepted by Gatekeeper\(who)."
         case .warn:
             // A non-fatal state: signed/accepted but missing notarization, or a
@@ -241,7 +253,10 @@ nonisolated struct AppSecurityResult: Identifiable, Sendable, Hashable {
 
 // MARK: - Whole-scan result
 
-nonisolated struct SecurityScanReport: Sendable, Hashable {
+// Codable so the entire last report (results + timestamp) round-trips to the
+// on-disk cache, letting the sheet show the previous scan instantly and a
+// "Last scanned …" caption without re-running the slow per-app checks.
+nonisolated struct SecurityScanReport: Sendable, Hashable, Codable {
     let results: [AppSecurityResult]
     // When the scan was run, for the "Last scanned …" caption.
     let scannedAt: Date

@@ -15,12 +15,17 @@ import AppKit
 // sees exactly what went wrong (e.g. the OneDrive / permissions cases).
 struct DuplicatesSheet: View {
     @Bindable var metrics: MaintenanceMetrics
+    // Catalog + installed-token sets are passed in (not re-fetched) so the scan
+    // and any subsequent removal can tell a Homebrew install from an App
+    // Store/manual one and pick the right uninstall path (brew vs move-to-Trash).
     let casks: [CaskMetadata]
     let installedCaskTokens: Set<String>
     let installedFormulaTokens: Set<String>
     let cli: BrewCLIService
     @Environment(\.dismiss) private var dismiss
 
+    // True while scanning or while any per-install removal is running; gates the
+    // header Re-scan button so brew calls can't overlap.
     private var busy: Bool { metrics.duplicatesScanning || !metrics.removingDuplicateIDs.isEmpty }
 
     var body: some View {

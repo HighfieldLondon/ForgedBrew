@@ -513,6 +513,8 @@ nonisolated struct TagFlowLayout: Layout {
         self.spacing = spacing
     }
 
+    // Lay subviews into rows greedily within the proposed width, summing row
+    // heights (+ inter-row spacing) for the total height.
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
         var rows: [[CGSize]] = [[]]
@@ -557,6 +559,8 @@ nonisolated struct TagFlowLayout: Layout {
         return CGSize(width: width, height: totalHeight)
     }
 
+    // Place each subview left-to-right, wrapping to a new row (advancing y by the
+    // tallest item in the completed row) once the next chip would overflow.
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let maxWidth = bounds.width
         var x = bounds.minX

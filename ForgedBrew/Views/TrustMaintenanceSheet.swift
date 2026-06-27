@@ -39,7 +39,12 @@ import AppKit
 // one pass and avoids _NSDetectedLayoutRecursion), header with Re-scan + Done,
 // a warning bar explaining the change, and scanning / empty / list states.
 struct TrustMaintenanceSheet: View {
+    // Shared maintenance state hub: owns the scan counters, the persisted
+    // gatekeeperRiskResult (split into actionable/watchOnly tiers), the
+    // trustingPaths/trustErrors that track in-flight Trust actions, and the
+    // loadGatekeeperRisks / trustApp entry points.
     @Bindable var metrics: MaintenanceMetrics
+    // Used to enumerate the installed cask apps to assess against Gatekeeper.
     let cli: BrewCLIService
     @Environment(\.dismiss) private var dismiss
 
@@ -47,6 +52,8 @@ struct TrustMaintenanceSheet: View {
     // alarming, since trusting is a deliberate, low-urgency choice.
     private static let trustYellow = Color(red: 0.78, green: 0.62, blue: 0.07)
 
+    // True while the Gatekeeper scan is running OR while any per-app Trust
+    // (xattr clear) is in flight; drives the Re-scan button's working state.
     private var busy: Bool {
         metrics.trustScanning || !metrics.trustingPaths.isEmpty
     }
@@ -65,6 +72,13 @@ struct TrustMaintenanceSheet: View {
         // Single definite size (see OrphansSheet) to keep AppKit's layout to one
         // top-down pass.
         .frame(width: 640, height: 580)
+        .task {
+            // Auto-run when the sheet opens. loadGatekeeperRisks self-guards: it
+            // reuses the saved report while it's fresh (within the 24h window)
+            // and only re-runs once stale, so reopening shows saved results
+            // immediately without re-scanning.
+            await metrics.loadGatekeeperRisks(cli: cli)
+        }
     }
 
     // MARK: Header
@@ -125,6 +139,13 @@ struct TrustMaintenanceSheet: View {
                      ? "Every installed app passes macOS Gatekeeper on its own, so the upcoming Homebrew change won’t stop them launching."
                      : "Run a scan to check your installed apps against the upcoming Homebrew change.")
                     .multilineTextAlignment(.center)
+                // Timestamp of the saved/just-completed scan, so the user knows
+                // how fresh this "nothing at risk" result is.
+                if metrics.trustHasScanned {
+                    Text(lastScannedCaption(metrics.gatekeeperRiskResult.scannedAt))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -233,8 +254,10 @@ struct TrustMaintenanceSheet: View {
         .padding(16)
     }
 
+    // Explicit Re-scan: passes force: true to bypass the 24h freshness gate the
+    // auto-run .task respects, so a deliberate tap always re-assesses every app.
     private func rescan() {
-        Task { await metrics.loadGatekeeperRisks(cli: cli) }
+        Task { await metrics.loadGatekeeperRisks(cli: cli, force: true) }
     }
 }
 

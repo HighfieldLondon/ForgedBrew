@@ -1,6 +1,19 @@
 import SwiftUI
 import AppKit
 
+// BrewfileView.swift
+//
+// Two-card screen for backing up and restoring a Homebrew setup via a Brewfile:
+//   - Export: write all installed packages to a file (NSSavePanel) and show a
+//     scrollable preview.
+//   - Import: read a chosen Brewfile (NSOpenPanel) and install everything,
+//     streaming brew's output line-by-line. Rather than showing a raw terminal,
+//     the raw lines are parsed into a friendly "X of Y / phase / progress bar"
+//     status that mirrors Update All. Can be shown full-page or in a sheet
+//     (Maintenance), in which case `onDone` adds a Done button.
+
+/// Brewfile export/import screen. Holds the import stream's raw lines and
+/// derives all user-facing status from them via computed properties below.
 struct BrewfileView: View {
     @Environment(AppDataService.self) var appData
     @State private var previewText = ""
@@ -259,6 +272,9 @@ struct BrewfileView: View {
         return "Import finished"
     }
 
+    // Prompt for a save location and write the Brewfile there. Failures are
+    // silently ignored (try?) — the preview above already proves what would be
+    // written.
     private func exportTapped() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "Brewfile"
@@ -267,6 +283,12 @@ struct BrewfileView: View {
         }
     }
 
+    // Prompt for a Brewfile, then drive the import: reset state, cancel any
+    // prior run, and append each streamed line to importLog (the computed
+    // status properties react to it). isImporting flips false when the stream
+    // ends. If a newer import supersedes this one, the cancellation checks bail
+    // out so a stale task can't keep appending to importLog or clear the flag
+    // out from under the run that replaced it.
     private func importTapped() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -279,8 +301,10 @@ struct BrewfileView: View {
             importTask = Task {
                 let stream = appData.importBrewfile(from: url)
                 for await line in stream {
+                    if Task.isCancelled { return }   // superseded by a newer import
                     importLog.append(line)
                 }
+                if Task.isCancelled { return }       // don't clear the flag for the newer run
                 isImporting = false
             }
         }

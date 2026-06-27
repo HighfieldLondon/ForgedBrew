@@ -2,6 +2,10 @@ import SwiftUI
 import AppKit
 @preconcurrency import CoreSpotlight
 
+/// Identifies which sidebar row is selected. Drives the whole detail pane via
+/// `DetailRouter`. Cask categories and the formulae taxonomy are deliberately
+/// modeled as distinct cases (see notes inline) so the two package worlds never
+/// share filter state.
 enum SidebarItem: Hashable, Sendable {
     case home
     case trending
@@ -437,6 +441,8 @@ struct DetailRouter: View {
     }
 }
 
+/// Placeholder shown when a section has no real screen yet (or when nothing is
+/// selected). A hammer glyph plus a "Coming soon" caption.
 struct ComingSoonView: View {
     let title: String
 
@@ -494,14 +500,53 @@ enum WindowFramePersistence {
         guard !isRestoring else { return }
         // Ignore zero/again-degenerate frames AppKit can momentarily report.
         guard window.frame.width > 1, window.frame.height > 1 else { return }
+        // Never persist a frame smaller than the window's own minimum content
+        // size: the main window is clamped to contentMinSize and can't legitimately
+        // be that small, so such a value can only be a transient/degenerate frame
+        // (or a non-main window that slipped through) and would restore as a tiny
+        // window. Defense in depth alongside excluding Sparkle/auxiliary windows
+        // from this delegate.
+        let minContent = window.contentMinSize
+        if minContent.width > 1, minContent.height > 1 {
+            let minFrame = window.frameRect(forContentRect: NSRect(origin: .zero, size: minContent)).size
+            guard window.frame.width >= minFrame.width - 1,
+                  window.frame.height >= minFrame.height - 1 else { return }
+        }
         UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: key)
         saveSidebarWidth(window)
     }
 
-    static func restore(_ window: NSWindow) {
+    // `screenVisibleFrame` lets the caller PIN the target screen for the whole
+    // enforcement run (see enforceRestore); when nil we resolve the window's
+    // current screen. Pinning matters on multi-display setups where the window's
+    // screen can flip mid-setFrame and make restore()/fit() cap to different
+    // screens, jittering the window.
+    static func restore(_ window: NSWindow, screenVisibleFrame: NSRect? = nil) {
         guard let saved = UserDefaults.standard.string(forKey: key) else { return }
-        let rect = NSRectFromString(saved)
+        var rect = NSRectFromString(saved)
         guard rect.width > 1, rect.height > 1 else { return }
+        // Floor the restored size to the window's minimum content size (converted
+        // to a full frame rect, incl. the title bar). A too-small saved frame —
+        // e.g. one accidentally captured from a transient Sparkle window by an
+        // older build — must never shrink the main window below what its content
+        // needs. This self-heals an already-corrupted saved frame on next launch,
+        // so the user doesn't have to drag the window back to size.
+        let minContent = window.contentMinSize
+        if minContent.width > 1, minContent.height > 1 {
+            let minFrame = window.frameRect(forContentRect: NSRect(origin: .zero, size: minContent)).size
+            rect.size.width = max(rect.size.width, minFrame.width)
+            rect.size.height = max(rect.size.height, minFrame.height)
+        }
+        // Then clamp the floored size DOWN to the usable screen, using the SAME cap
+        // as fitWindowOnScreen()/WindowSizeGuard.cap(). On a short screen the
+        // contentMinSize floor above can exceed what the screen allows; without
+        // this clamp restore() (flooring up) and the enforce-timer's fit() pass
+        // (capping down) would disagree and visibly jitter the window for the whole
+        // ~3s enforcement window. Reconciling them here makes a single pass stable.
+        if let visible = screenVisibleFrame ?? (window.screen ?? NSScreen.main)?.visibleFrame {
+            rect.size.width = min(rect.size.width, visible.width)
+            rect.size.height = min(rect.size.height, max(480, visible.height - 12))
+        }
         window.setFrame(rect, display: true)
     }
 
@@ -538,23 +583,43 @@ enum WindowFramePersistence {
     }
 
     // Enforce the saved frame + sidebar by re-applying them on a short repeating
-    // timer for a fixed window, regardless of when SwiftUI's late
-    // content-driven resize fires. Saving stays suppressed the whole time so
-    // none of these echoes overwrite the user's saved value; we re-arm at the
-    // end. A blanket 3s of enforcement is simple and reliably beats the race.
-    @MainActor static func enforceRestore(on window: NSWindow, fit: @escaping (NSWindow) -> Void) {
+    // timer, regardless of when SwiftUI's late content-driven resize fires.
+    // Saving stays suppressed the whole time so none of these echoes overwrite
+    // the user's saved value; we re-arm at the end.
+    //
+    // We stop EARLY once the frame has stopped moving for a short run (SwiftUI's
+    // late resize has settled and our re-apply is a no-op) — but never before a
+    // ~0.5s floor, so we still beat SwiftUI's initial layout pass. The 3s deadline
+    // is a hard backstop. Early-exit matters because `restoreSidebarWidth` sets
+    // the divider every tick: enforcing for the full 3s would stomp a user trying
+    // to drag the sidebar right after launch. The target screen is PINNED once for
+    // the whole run so restore()/fit() can't cap to different displays mid-run.
+    @MainActor static func enforceRestore(on window: NSWindow, fit: @escaping (NSWindow, NSRect?) -> Void) {
         isRestoring = true
         let deadline = Date().addingTimeInterval(3.0)
+        let minEnforce = Date().addingTimeInterval(0.5)
+        let pinnedVisible = (window.screen ?? NSScreen.main)?.visibleFrame
         // Apply once immediately so the very first paint is already correct.
-        restore(window)
+        restore(window, screenVisibleFrame: pinnedVisible)
         restoreSidebarWidth(window)
-        fit(window)
+        fit(window, pinnedVisible)
+        var lastFrame = window.frame
+        var stableTicks = 0
+        let requiredStableTicks = 10        // ~250ms of no movement = settled
         let timer = Timer(timeInterval: 0.025, repeats: true) { t in
             MainActor.assumeIsolated {
-                restore(window)
+                restore(window, screenVisibleFrame: pinnedVisible)
                 restoreSidebarWidth(window)
-                fit(window)
-                if Date() >= deadline {
+                fit(window, pinnedVisible)
+                let now = window.frame
+                let settled = abs(now.origin.x - lastFrame.origin.x) < 1
+                    && abs(now.origin.y - lastFrame.origin.y) < 1
+                    && abs(now.size.width - lastFrame.size.width) < 1
+                    && abs(now.size.height - lastFrame.size.height) < 1
+                stableTicks = settled ? stableTicks + 1 : 0
+                lastFrame = now
+                if (stableTicks >= requiredStableTicks && Date() >= minEnforce)
+                    || Date() >= deadline {
                     t.invalidate()
                     // Re-arm saving a tick after enforcement ends so the final
                     // settle is not itself saved as churn.
@@ -568,13 +633,21 @@ enum WindowFramePersistence {
     }
 }
 
+/// Window delegate that hard-caps the main window to the usable screen and keeps
+/// every edge on-screen, wrapping (and forwarding to) SwiftUI's own delegate.
+/// See the "Window size guard" block above for the full rationale.
 final class WindowSizeGuard: NSObject, NSWindowDelegate {
+    // SwiftUI's original window delegate. Weak because the window owns it; we
+    // forward all unhandled behavior here so standard window handling is intact.
     weak var forward: NSWindowDelegate?
 
     init(forwarding original: NSWindowDelegate?) {
         self.forward = original
     }
 
+    // The maximum allowed window size for `window`: the screen's visible width,
+    // and its visible height minus a clearance so the title bar never jams under
+    // the menu bar. Floored at 480pt tall so a tiny screen can't degenerate it.
     private func cap(for window: NSWindow) -> NSSize {
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame.size
             ?? NSSize(width: 1920, height: 1049)
@@ -643,6 +716,9 @@ final class WindowSizeGuard: NSObject, NSWindowDelegate {
     }
 }
 
+/// App lifecycle owner. Handles first-run appearance defaults, headless/menu-bar
+/// launch, the red-X "hide vs. quit" retargeting, window-size/position guarding,
+/// the keep-alive termination rules, and session-secret cleanup on quit.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Default a GENUINE first install to dark mode — but only that.
@@ -708,11 +784,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    // True for any window Sparkle presents (download/install progress, the update
+    // alert, the permission prompt). Sparkle owns these via window controllers /
+    // delegates that live in the Sparkle framework bundle, so we identify them by
+    // their class's defining bundle — robust against localized titles and Sparkle
+    // version bumps — and fall back to the `SU`/`SPU` class-name prefix Sparkle
+    // uses. This keeps the main-window size guard and frame persistence from ever
+    // latching onto a transient Sparkle window. Our own WindowSizeGuard delegate
+    // is skipped (it isn't a Sparkle class), so a wrapped main window is unaffected.
+    private func isSparkleWindow(_ window: NSWindow) -> Bool {
+        func isSparkleClass(_ cls: AnyClass) -> Bool {
+            if let id = Bundle(for: cls).bundleIdentifier,
+               id.range(of: "sparkle", options: .caseInsensitive) != nil {
+                return true
+            }
+            let name = NSStringFromClass(cls)
+            return name.hasPrefix("SU") || name.hasPrefix("SPU")
+        }
+        if let controller = window.windowController, isSparkleClass(type(of: controller)) {
+            return true
+        }
+        if let delegate = window.delegate, isSparkleClass(type(of: delegate)) {
+            return true
+        }
+        return isSparkleClass(type(of: window))
+    }
+
     @objc private func windowBecameVisible(_ note: Notification) {
         guard let window = note.object as? NSWindow, window.canBecomeMain else {
             return
         }
         MainActor.assumeIsolated {
+            // Sparkle's own update windows (download/install progress, the update
+            // alert, the permission prompt) must NEVER be mistaken for our main
+            // window. If they were, we'd attach the WindowSizeGuard to them, force
+            // our 1100x720 contentMinSize onto them, and — worst of all — persist
+            // their short frame as ForgedBrewMainWindowFrame, so the app reopens
+            // tiny after installing an update. Ignore them outright (and leave the
+            // visible-window count alone, since we never observe their close).
+            if isSparkleWindow(window) { return }
             // Only the MAIN WindowGroup window gets the red-X retargeting. Leave
             // auxiliary child windows (Settings, User Manual, Welcome) on their
             // normal close behavior so their red X just closes that one window.
@@ -794,8 +904,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // (isRestoring) for the whole enforcement window so none of these
             // programmatic setFrame echoes — or SwiftUI's late resize — overwrite
             // the user's saved value. We then re-arm saving.
-            WindowFramePersistence.enforceRestore(on: window) { [weak self] w in
-                self?.fitWindowOnScreen(w)
+            WindowFramePersistence.enforceRestore(on: window) { [weak self] w, visibleFrame in
+                self?.fitWindowOnScreen(w, screenVisibleFrame: visibleFrame)
             }
             StartupSettings.shared.windowDidBecomeVisible()
         }
@@ -808,9 +918,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // calling setFrame from inside the windows own layout cycle recurses and
     // crashes. Running once, deferred, is enough because the stable autosave
     // name keeps a good frame from then on.
-    private func fitWindowOnScreen(_ window: NSWindow) {
-        guard let screen = window.screen ?? NSScreen.main else { return }
-        let visible = screen.visibleFrame
+    private func fitWindowOnScreen(_ window: NSWindow, screenVisibleFrame: NSRect? = nil) {
+        guard let visible = screenVisibleFrame ?? (window.screen ?? NSScreen.main)?.visibleFrame else { return }
         let clearance: CGFloat = 12
         let maxHeight = max(480, visible.height - clearance)
         let original = window.frame
@@ -829,16 +938,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // last window, HIDE the window (orderOut) so the WindowGroup scene — and the
     // process — stays alive. Otherwise perform the normal close (which lets the
     // app quit as before when the menu bar is off).
-    // Timestamp of the most recent red-X close-button click. applicationShould
-    // Terminate uses this to tell a window-close (which it should cancel when
-    // the menu bar is on) apart from a real Cmd+Q / menu-bar Quit.
-    private var lastCloseButtonClick: Date = .distantPast
 
     // Retains the window size guard delegate (NSWindow.delegate is weak).
     private var windowSizeGuards: [WindowSizeGuard] = []
 
     @objc private func handleCloseButton(_ sender: Any?) {
-        lastCloseButtonClick = Date()
         MainActor.assumeIsolated {
             guard let window = NSApp.keyWindow ?? NSApp.mainWindow
                     ?? NSApp.windows.first(where: { $0.canBecomeMain && $0.isVisible }) else { return }
@@ -905,16 +1009,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || StartupSettings.shared.showInMenuBar
                 || StartupSettings.shared.hasStatusItem)
         }
-        // Keep-alive rule: when ForgedBrew should live on in the menu bar, the
-        // ONLY thing that truly quits the process is the menu bar icon's "Quit
-        // ForgedBrew" item (which sets userRequestedQuit via requestQuit()). Every
-        // other quit attempt — Cmd+Q, the app menu's Quit item, or the last
-        // window closing — is treated as "exit the app window" and is redirected
-        // to hiding all windows so the menu bar icon (and the process) stays
-        // resident. This is what makes "Show in Menu Bar" behave like a true
-        // background menu bar agent: exiting the app leaves the icon running.
-        // A Sparkle-initiated relaunch (installingUpdate) must always terminate,
-        // exactly like an explicit user quit — otherwise the update install stalls.
+        // Keep-alive rule: when ForgedBrew should live on in the menu bar, an
+        // IMPLICIT exit — the last window closing on its own — is redirected to
+        // hiding all windows so the menu bar icon (and the process) stays resident.
+        // An EXPLICIT quit always terminates: Cmd+Q and the app menu's "Quit
+        // ForgedBrew" set userRequestedQuit via the replaced .appTermination
+        // command, and the menu bar icon's Quit item sets it via requestQuit().
+        // A Sparkle-initiated relaunch (installingUpdate) must always terminate too,
+        // or the update install stalls. The red-X close button never reaches here —
+        // it's intercepted by handleCloseButton, which hides to the menu bar.
         if userQuit || installingUpdate || !liveInMenuBar {
             return .terminateNow
         }
@@ -939,6 +1042,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// App entry point. Defines the scene graph (main WindowGroup with the
+/// sidebar/detail split, plus the Settings, User Manual, and Welcome windows),
+/// injects the shared services into the environment, and kicks off the launch
+/// refresh + badge/background-check wiring.
 @main
 struct ForgedBrewApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -1109,6 +1216,20 @@ struct ForgedBrewApp: App {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updater)
+            }
+            // Cmd+Q (and the app menu's "Quit ForgedBrew") must TRULY quit, even
+            // with the menu-bar icon enabled. We replace the standard Quit item so
+            // it flags an explicit user quit (requestQuit) before terminating;
+            // otherwise applicationShouldTerminate's menu-bar keep-alive rule would
+            // redirect Cmd+Q to merely hiding the window. The red-X close button is
+            // unaffected — it still hides to the menu bar (see handleCloseButton).
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit ForgedBrew") {
+                    // requestQuit() flags the explicit quit AND terminates, so the
+                    // menu-bar keep-alive rule doesn't redirect this to "hide".
+                    StartupSettings.shared.requestQuit()
+                }
+                .keyboardShortcut("q", modifiers: .command)
             }
             // Replace the default "ForgedBrew Help" item (which points at a help
             // book that does not exist, so it shows "ForgedBrew Help isn't

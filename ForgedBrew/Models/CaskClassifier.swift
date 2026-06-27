@@ -13,11 +13,17 @@ import Foundation
 // This is pure, deterministic, and Sendable-safe so it can be called from any
 // isolation context (it's used by CaskMetadata's computed `category`/`subcategory`).
 
+/// Stateless keyword classifier that maps a cask onto the app's two-level
+/// (category, subcategory) taxonomy. Used as a caseless `enum` namespace — there
+/// are no instances; everything is `static`. The taxonomy data lives in `cats`
+/// and is the single source of truth for both classification and the sidebar's
+/// subcategory listing.
 nonisolated enum CaskClassifier {
 
-    // A single subcategory rule: a display name plus the single-word keywords
-    // (matched as whole tokens) and multi-word phrases (matched with word
-    // boundaries against the combined string).
+    /// A single subcategory rule: a display name plus the single-word keywords
+    /// (matched as whole tokens) and multi-word phrases (matched with word
+    /// boundaries against the combined string). `words` is checked first via a
+    /// fast set intersection; `phrases` only when no word hit.
     private struct Rule {
         let sub: String
         let words: Set<String>
@@ -38,7 +44,10 @@ nonisolated enum CaskClassifier {
         ".io", ".com", ".org", ".net", ".app", ".dev"
     ]
 
-    // Normalize a cask into (combined string, token word-set).
+    // Normalize a cask into (combined string, token word-set). The token is
+    // exploded on "-"/"@" so a token like "visual-studio-code" yields the words
+    // "visual", "studio", "code"; the word-set powers fast keyword matching while
+    // the combined string preserves adjacency for multi-word phrase matching.
     private static func soupify(token: String, desc: String, homepage: String) -> (combined: String, words: Set<String>) {
         var hp = homepage.lowercased()
         for noise in hostNoise {
@@ -66,7 +75,9 @@ nonisolated enum CaskClassifier {
     }
 
     // Whole-word/phrase match: the keyword must be bounded by non-letter chars
-    // on both sides (mirrors the Python regex (?<![a-z])kw(?![a-z])).
+    // on both sides (mirrors the Python regex (?<![a-z])kw(?![a-z])). Hand-rolled
+    // sliding-window scan rather than NSRegularExpression — it runs once per
+    // phrase for every cask in the catalog, so avoiding regex setup cost matters.
     private static func hasPhrase(_ combined: String, _ kw: String) -> Bool {
         guard !kw.isEmpty else { return false }
         let chars = Array(combined)
@@ -209,8 +220,8 @@ nonisolated enum CaskClassifier {
         ])
     ]
 
-    // The subcategory display names for a category, in canonical (rule-declared)
-    // order. Used by the sidebar to render the disclosure children. Categories
+    /// The subcategory display names for a category, in canonical (rule-declared)
+    /// order. Used by the sidebar to render the disclosure children. Categories
     // with a single subcategory equal to the category itself (e.g. Networking)
     // or no meaningful breakdown (Fonts, Other) return an empty list — the
     // sidebar then renders them as plain, non-expandable rows.
@@ -224,7 +235,11 @@ nonisolated enum CaskClassifier {
         return subs
     }
 
-    // Classify a cask into (category, subcategoryDisplayName).
+    /// Classify a cask into (category, subcategoryDisplayName). Walks `cats` in
+    /// declared order and returns the first matching rule's (category, sub);
+    /// falls through to (.other, "Other") when nothing matches. Because order is
+    /// significant, a cask that could plausibly fit two categories lands in
+    /// whichever appears earlier in `cats` (specific → broad).
     static func classify(token: String, desc: String?, homepage: String?) -> (category: CaskCategory, subcategory: String) {
         let (combined, words) = soupify(token: token, desc: desc ?? "", homepage: homepage ?? "")
         for entry in cats {

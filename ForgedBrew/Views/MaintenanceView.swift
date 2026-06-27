@@ -1,7 +1,47 @@
+//
+//  MaintenanceView.swift
+//  ForgedBrew
+//
+//  The "Maintenance" tab — ForgedBrew's catch-all for keeping a Homebrew
+//  installation healthy. It is two things stacked together:
+//
+//   1. `MaintenanceMetrics` — a @MainActor @Observable view-model that owns ALL
+//      of the screen's asynchronously-probed state: the brew-doctor report,
+//      cache sizes, Homebrew's own version, plus the results of every on-demand
+//      scan (orphans, duplicates, disk footprint, quarantine, adopt candidates,
+//      local security scan, network CVE scan, and the Gatekeeper "trust" scan).
+//      Each probe is best-effort and degrades to a neutral state on failure;
+//      none of them throws into the UI. The scans share a few recurring
+//      patterns worth knowing before reading the methods:
+//        • a `scanning` Bool flag (drives spinners / disables buttons), cleared
+//          on every exit path — several use `defer` so a Task cancelled when its
+//          sheet is dismissed mid-scan can never leave the flag stuck true;
+//        • a re-entrancy guard (`guard !scanning`) so overlapping Tasks don't
+//          fight over the live progress counters;
+//        • live progress callbacks (scanned / total / current-item) that the
+//          service invokes on the main actor so the sheet updates app-by-app;
+//        • per-row error dictionaries keyed by token / path / install-id so a
+//          failed action surfaces its reason inline instead of being swallowed.
+//
+//   2. `MaintenanceView` and its sheets/cards — the SwiftUI surface. The body is
+//      a grid of one-tap "action cards"; each heavier task opens a dedicated
+//      sheet (Quarantine, Adopt, Duplicates, Orphans, Disk Usage, Security,
+//      Vulnerability, Trust) bound to the shared `MaintenanceMetrics`.
+//
+//  Scan-result persistence & freshness: the Security and Trust scans are slow,
+//  so their last completed report is written to Application Support and reloaded
+//  on init. Reopening a scan screen (or relaunching the app) shows the saved
+//  results immediately; a scan only auto-re-runs once its result is older than
+//  `MaintenanceMetrics.scanFreshness` (24h) or the user taps Re-scan (force).
+//
+
 import SwiftUI
 
 import AppKit
 
+/// A circular progress gauge for the overall health score (0–100). Colour is
+/// derived from the score (green > 80, yellow > 50, red otherwise) and the trim
+/// animates as the score changes.
 struct HealthRing: View {
     let score: Int  // 0–100
 
@@ -33,11 +73,17 @@ struct HealthRing: View {
     }
 }
 
+/// A reusable one-tap "action" card (icon + title + description + a single
+/// button) whose action streams brew CLI output. The raw output is never shown:
+/// while it runs the card shows a spinner, and on completion `resultSummary`
+/// distils the collected lines into one friendly status line. Used for the
+/// Homebrew Cache cleanup card; other cards on this screen open sheets instead.
 struct ActionCard: View {
     let icon: String
     let iconColor: Color
     let title: String
     let description: String
+    /// Builds and returns the stream of CLI output lines for this card's action.
     let onRun: () async -> AsyncStream<String>
     // Optional closure that turns the collected command output into a single
     // friendly status line (e.g. "Ready to brew" for Doctor). When nil, a
@@ -169,6 +215,11 @@ struct ActionCard: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
     }
 
+    // Resets the card to its running state, then drains the action's stream on a
+    // background Task: each line is appended to `log` on the main actor (watching
+    // for the TCC permission block as it goes), and once the stream ends the
+    // collected log is reduced to a single `summary` line. Any previous Task is
+    // cancelled first so re-running mid-flight can't leave two streams racing.
     private func run(_ action: @escaping () async -> AsyncStream<String>) {
         isRunning = true
         isDone = false
@@ -196,13 +247,13 @@ struct ActionCard: View {
     }
 }
 
-// Holds the asynchronously-probed maintenance metrics (cache size, parsed
-// doctor report, per-app sizes, and ForgedBrew's own cache size) so the view can
-// render them with loading states. All probes are best-effort and degrade to a
-// neutral state on failure.
+// (See the file header for an overview of MaintenanceMetrics, which holds all of
+// this screen's asynchronously-probed state and is defined below.)
 
-// The classified result of an adopt attempt, so the UI can show the right icon,
-// color, and message (and decide whether to offer the Force fallback).
+/// The classified result of an adopt attempt, so the UI can show the right icon,
+/// colour, and message — and decide whether to offer the Force fallback. The
+/// associated `String` is the user-facing message; `adoptSummary(_:)` maps brew's
+/// raw output onto one of these cases.
 nonisolated enum AdoptOutcome: Equatable, Sendable {
     case success(String)        // adopted cleanly
     case mismatch(String)       // already installed / version mismatch — Force may help
@@ -219,6 +270,13 @@ nonisolated enum AdoptOutcome: Equatable, Sendable {
     var isFailure: Bool { if case .failure = self { return true }; return false }
 }
 
+/// The view-model backing the entire Maintenance screen. It is `@MainActor`
+/// (every property mutation happens on the main actor, so progress callbacks
+/// from the off-actor scanners can write straight to these `@Observable`
+/// properties and the UI reflects them live) and `@Observable` (SwiftUI tracks
+/// reads automatically). One instance is created by `MaintenanceView` and shared
+/// into every sheet, so a scan kicked off from a card is visible in its sheet.
+/// See the file header for the shared scan/load/persistence conventions.
 @MainActor
 @Observable
 final class MaintenanceMetrics {
@@ -262,6 +320,9 @@ final class MaintenanceMetrics {
     // user to grant access (without which cache cleanup + sizes are unreliable).
     var fdaGranted: Bool = false
 
+// Probes whether ForgedBrew has Full Disk Access. Drives the banner that
+    // prompts the user to grant it (without which cache cleanup and quarantine
+    // removal silently fail).
 func loadFDAStatus() async {
         fdaGranted = FullDiskAccess.isGranted()
     }
@@ -324,10 +385,12 @@ func loadFDAStatus() async {
         }
     }
 
+    // Measures the current Homebrew download-cache size (the "before" figure).
     func loadCacheSize(cli: BrewCLIService) async {
         brewCacheSize = (try? await cli.cacheSize()) ?? nil
     }
 
+    // Re-measures the cache after a cleanup so the card can show "was X, now Y".
     func refreshCacheAfterCleanup(cli: BrewCLIService) async {
         brewCacheSizeAfter = (try? await cli.cacheSize()) ?? nil
     }
@@ -396,12 +459,15 @@ func loadFDAStatus() async {
                         installedFormulaTokens: Set<String>,
                         cli: BrewCLIService) async {
         duplicatesScanning = true
+        // Clear the flag on every exit path (including Task cancellation when
+        // the sheet is dismissed mid-scan) so the view can never get stuck
+        // showing "Scanning…". Mirrors loadQuarantinedItems.
+        defer { duplicatesScanning = false }
         duplicateGroups = await cli.scanDuplicates(
             casks: casks,
             installedCaskTokens: installedCaskTokens,
             installedFormulaTokens: installedFormulaTokens
         )
-        duplicatesScanning = false
     }
 
     // Removes one copy of a duplicate, then re-scans so the resolved group drops
@@ -441,8 +507,10 @@ func loadFDAStatus() async {
     // Asks Homebrew which formulae are orphaned and enriches each with size.
     func loadOrphans(cli: BrewCLIService) async {
         orphansScanning = true
+        // Clear on every exit path (including Task cancellation mid-scan) so the
+        // view can never get stuck showing "Scanning…". Mirrors loadQuarantinedItems.
+        defer { orphansScanning = false }
         orphanResult = await cli.scanOrphanedPackages()
-        orphansScanning = false
     }
 
     // Removes one orphaned formula, then re-scans so the list refreshes (and
@@ -494,15 +562,45 @@ func loadFDAStatus() async {
     // why clearing the quarantine flag failed.
     var trustErrors: [String: String] = [:]
 
+    // How long a completed scan stays "fresh". While fresh, reopening a scan
+    // screen shows the saved results instead of auto-re-running. Re-scan always
+    // overrides this.
+    static let scanFreshness: TimeInterval = 24 * 60 * 60   // 24 hours
+
+    // True when the last Security Scan finished within the freshness window.
+    // `timeIntervalSinceNow` is NEGATIVE for a past date, so a scan that ran less
+    // than `scanFreshness` ago compares as "> -scanFreshness". We ALSO require the
+    // timestamp not be in the future (`<= Date()`): a clock change or hand-edited
+    // cache could leave a future date, which would otherwise read as "fresh"
+    // indefinitely and suppress the auto-rescan forever. A future date is treated
+    // as stale so a rescan runs. `loadSecurityScan` checks this to skip an auto-re-run.
+    var securityIsFresh: Bool {
+        securityHasScanned
+            && securityScannedAt.timeIntervalSinceNow > -Self.scanFreshness
+            && securityScannedAt <= Date()
+    }
+    // True when the last Trust scan finished within the freshness window. The
+    // Trust scan stores its own timestamp on the result struct rather than a
+    // separate property, so we read it from there. Same future-date guard as
+    // above: a future timestamp is treated as stale so a rescan runs.
+    var trustIsFresh: Bool {
+        trustHasScanned
+            && gatekeeperRiskResult.scannedAt.timeIntervalSinceNow > -Self.scanFreshness
+            && gatekeeperRiskResult.scannedAt <= Date()
+    }
+
     // Scans installed cask apps and keeps only the ones Gatekeeper would reject
     // today — the apps at risk from the upcoming Homebrew cask-quarantine change.
-    func loadGatekeeperRisks(cli: BrewCLIService) async {
+    // `force: true` (the Re-scan button, and the post-trustApp re-scan) bypasses
+    // the freshness gate; otherwise a fresh saved result is reused as-is.
+    func loadGatekeeperRisks(cli: BrewCLIService, force: Bool = false) async {
         // Re-entrancy guard. Several paths can ask for a scan (the Review
         // button, Re-scan, and trustApp re-scans when done).
         // Without this, overlapping Tasks each reset the counter to 0 and start
         // a fresh pass, so the progress bar appears to climb, snap back, climb
         // higher, snap back, etc. Bail out if a scan is already running.
         guard !trustScanning else { return }
+        if !force && trustIsFresh { return }            // reuse saved results (new)
         trustScanning = true
         trustScannedCount = 0
         trustTotalCount = 0
@@ -517,7 +615,6 @@ func loadFDAStatus() async {
         defer {
             trustScanning = false
             trustCurrentApp = nil
-            trustHasScanned = true
         }
         // Walk apps one-by-one and update the live progress as each is checked.
         // The callback runs on the main actor, so it can mutate this @Observable
@@ -528,6 +625,14 @@ func loadFDAStatus() async {
             self.trustTotalCount = total
             self.trustCurrentApp = currentApp.isEmpty ? nil : currentApp
         }
+        // Persist after the assignment so a cancelled scan (which leaves the
+        // result unchanged) doesn't overwrite the saved report with a partial.
+        saveTrustScan()
+        // Mark complete only on the real-completion path (NOT in the defer above),
+        // matching loadSecurityScan: a Task cancelled mid-scan must not flip this
+        // on while gatekeeperRiskResult is still empty, which would render the
+        // reassuring "Nothing at risk" copy on a partial/aborted scan.
+        trustHasScanned = true
     }
 
     // Clears the quarantine flag on one trusted app (xattr -d com.apple.quarantine
@@ -543,7 +648,7 @@ func loadFDAStatus() async {
             trustErrors[risk.appPath] = "Couldn’t clear the quarantine flag for this app."
             return   // keep the app visible with its error
         }
-        await loadGatekeeperRisks(cli: cli)
+        await loadGatekeeperRisks(cli: cli, force: true)
     }
 
     // Disk footprint (Apps / Formulae / Caskroom / cache / taps) state.
@@ -557,8 +662,10 @@ func loadFDAStatus() async {
     // from the per-cask sizes already on InstalledPackage and passes it in.
     func loadDiskFootprint(cli: BrewCLIService, caskAppsBytes: Int64) async {
         footprintMeasuring = true
+        // Clear on every exit path (including Task cancellation mid-measure) so
+        // the view can never get stuck showing "Measuring…". Mirrors loadQuarantinedItems.
+        defer { footprintMeasuring = false }
         diskFootprint = await cli.measureDiskFootprint(caskAppsBytes: caskAppsBytes)
-        footprintMeasuring = false
     }
 
     // MARK: - Security scan
@@ -612,6 +719,10 @@ func loadFDAStatus() async {
     // This is the only ForgedBrew feature that uses the network.
     func loadVulnerabilityScan(cli: BrewCLIService) async {
         vulnScanning = true
+        // Clear on every exit path (the empty-targets guard below AND Task
+        // cancellation mid-scan) so the view can never get stuck showing
+        // "Scanning…". Mirrors loadQuarantinedItems.
+        defer { vulnScanning = false }
         vulnError = nil
         vulnResults = []
         vulnScannedCount = 0
@@ -624,7 +735,6 @@ func loadFDAStatus() async {
             vulnHasScanned = true
             vulnError = "No installed packages were found to check."
             vulnScannedAt = Date()
-            vulnScanning = false
             return
         }
 
@@ -645,14 +755,30 @@ func loadFDAStatus() async {
         vulnCurrentPkg = nil
         vulnScannedAt = Date()
         vulnHasScanned = true
-        vulnScanning = false
     }
 
     // Runs the local security scan across every installed cask app bundle,
     // appending each app's result AS IT COMPLETES so the UI updates live. No
     // network access — this only uses macOS's own codesign + spctl tooling.
-    func loadSecurityScan(cli: BrewCLIService) async {
+    // `force: true` (Re-scan) bypasses the freshness gate; otherwise a saved
+    // result that is still fresh is reused without re-scanning. A completed result
+    // (when casks were found) is persisted so reopening the screen shows it
+    // immediately; the empty "no casks found" outcome is intentionally NOT
+    // persisted (see the guard below).
+    func loadSecurityScan(cli: BrewCLIService, force: Bool = false) async {
+        if securityScanning { return }                 // re-entrancy guard
+        if !force && securityIsFresh { return }         // reuse fresh saved results
         securityScanning = true
+        // Clear the scanning flag (and the live "current app") on EVERY exit path —
+        // including Task cancellation when the sheet is dismissed mid-scan — so the
+        // re-entrancy guard above can never latch true forever and turn every later
+        // scan into a silent no-op. Mirrors loadGatekeeperRisks. (securityHasScanned
+        // and saveSecurityScan stay on the real-completion path below, so a cancelled
+        // partial scan is neither marked complete nor persisted.)
+        defer {
+            securityScanning = false
+            securityCurrentApp = nil
+        }
         securityError = nil
         securityResults = []
         securityScannedCount = 0
@@ -665,7 +791,10 @@ func loadFDAStatus() async {
             securityHasScanned = true
             securityError = "No cask-installed apps were found to scan."
             securityScannedAt = Date()
-            securityScanning = false
+            // Deliberately NOT persisted: a saved empty report would reload as a
+            // misleading "All 0 apps passed" because securityError isn't part of
+            // SecurityScanReport. Re-running an empty scan next launch is cheap and
+            // shows the correct "no casks found" message.
             return
         }
 
@@ -681,10 +810,9 @@ func loadFDAStatus() async {
             securityScannedCount += 1
         }
 
-        securityCurrentApp = nil
         securityScannedAt = Date()
         securityHasScanned = true
-        securityScanning = false
+        saveSecurityScan()
     }
 
     // Removes quarantine from the given paths, then re-scans so the list and
@@ -864,13 +992,90 @@ func loadFDAStatus() async {
         _ = await ForgedBrewCacheService.shared.clearAll()
         await loadForgedBrewCacheSize()
     }
+
+    // MARK: - Scan result persistence
+    //
+    // Security & Trust scans are slow (many large bundles). Persist the last
+    // completed report to Application Support so reopening a screen — or
+    // relaunching the app — shows the saved results immediately with their
+    // timestamp, instead of re-running. Auto-re-run only happens once a result
+    // is older than `scanFreshness`, or when the user taps Re-scan.
+
+    // Application Support/ForgedBrew/ScanCache, created on demand. Falls back to
+    // the temp dir if Application Support is somehow unavailable so persistence
+    // never throws (a lost temp cache just means the next open re-scans).
+    private static var scanCacheDir: URL {
+        let fm = FileManager.default
+        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                appropriateFor: nil, create: true)) ?? fm.temporaryDirectory
+        let dir = base.appendingPathComponent("ForgedBrew/ScanCache", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    private static var securityCacheURL: URL { scanCacheDir.appendingPathComponent("security-scan.json") }
+    private static var trustCacheURL: URL    { scanCacheDir.appendingPathComponent("trust-scan.json") }
+
+    // Writes the current security report to disk (atomically). Called at the end
+    // of every completed security scan. All failures are swallowed — a missed
+    // save just costs a re-scan next time, never a crash.
+    func saveSecurityScan() {
+        // Never persist an empty report: it carries no per-app results and would
+        // reload as a misleading "All 0 apps passed" (the "no casks" error text
+        // isn't part of the report). Only a real, non-empty completion is cached.
+        guard !securityResults.isEmpty else { return }
+        let report = SecurityScanReport(results: securityResults, scannedAt: securityScannedAt)
+        if let data = try? JSONEncoder().encode(report) {
+            try? data.write(to: Self.securityCacheURL, options: .atomic)
+        }
+    }
+    // Writes the current Gatekeeper-risk result to disk (atomically) at the end
+    // of a completed trust scan. The result struct carries its own timestamp.
+    func saveTrustScan() {
+        if let data = try? JSONEncoder().encode(gatekeeperRiskResult) {
+            try? data.write(to: Self.trustCacheURL, options: .atomic)
+        }
+    }
+
+    // Loads any persisted scan reports back into memory. Called once from `init`,
+    // so a freshly-launched screen shows the last results immediately. The
+    // `scannedAt != .distantPast` guard rejects a sentinel/empty report (the
+    // default timestamp) so we don't pretend a never-run scan has completed —
+    // that would leave `hasScanned` true with no real results.
+    private func loadPersistedScans() {
+        if let data = try? Data(contentsOf: Self.securityCacheURL),
+           let report = try? JSONDecoder().decode(SecurityScanReport.self, from: data),
+           report.scannedAt != .distantPast {
+            securityResults = report.results
+            securityScannedAt = report.scannedAt
+            securityHasScanned = true
+        }
+        if let data = try? Data(contentsOf: Self.trustCacheURL),
+           let result = try? JSONDecoder().decode(GatekeeperRiskScanResult.self, from: data),
+           result.scannedAt != .distantPast {
+            gatekeeperRiskResult = result
+            trustHasScanned = true
+        }
+    }
+
+    // Rehydrate persisted Security/Trust reports up front so the screen opens
+    // with saved results rather than a blank "never scanned" state.
+    init() {
+        loadPersistedScans()
+    }
 }
 
+/// The Maintenance tab's root view. Owns the shared `MaintenanceMetrics`, kicks
+/// off the best-effort metric probes in `.task` on appear, lays out the health
+/// panel + diagnostics + the action-card grid, and hosts every maintenance sheet
+/// (each bound to the shared metrics object).
 struct MaintenanceView: View {
     @Environment(AppDataService.self) var appData
     @State private var metrics = MaintenanceMetrics()
 
-    // Computed health score
+    // The 0–100 health score driving the ring. Deliberately simple: start at 100
+    // and dock 5 points per outdated package, capped at a 50-point total penalty
+    // so the score never drops below 50 from outdated packages alone (the ring
+    // stays in the "needs attention", not "critical", zone for updates only).
     private var healthScore: Int {
         let outdatedPenalty = min(appData.installedPackages.filter(\.isOutdated).count * 5, 50)
         return max(0, 100 - outdatedPenalty)
@@ -1334,7 +1539,6 @@ struct MaintenanceView: View {
                 Spacer()
                 Button {
                     showTrustMaintenanceSheet = true
-                    Task { await metrics.loadGatekeeperRisks(cli: appData.cli) }
                 } label: {
                     Text("Review")
                 }
@@ -2125,9 +2329,10 @@ struct MaintenanceView: View {
         }
     }
 }
-// Multi-select sheet listing every quarantined file under /Applications and
-// ~/Applications. The user can check any subset and remove quarantine, or use
-// the top button to clear quarantine from all listed files at once.
+/// Multi-select sheet listing every quarantined file under /Applications and
+/// ~/Applications. The user can check any subset and remove quarantine, or use
+/// the top button to clear quarantine from all listed files at once. Backed by
+/// the shared `MaintenanceMetrics` (scan + removal state live there).
 struct QuarantineSheet: View {
     @Bindable var metrics: MaintenanceMetrics
     let cli: BrewCLIService
@@ -2319,13 +2524,13 @@ struct QuarantineSheet: View {
 
 // MARK: - Adopt Apps sheet
 
-// Lists apps in /Applications (and ~/Applications) that aren't managed by
-// Homebrew but match a known cask, and lets the user adopt each one
-// (`brew install --cask --adopt`). Mirrors the QuarantineSheet structure:
-// header + re-scan, a scrollable list of rows, and a footer. Per-row actions:
-// Adopt, Force-adopt (after a version-mismatch), Hide, and a manual cask
-// override for when the suggested token is wrong. A "Manage Hidden Apps"
-// disclosure lets the user unhide previously-hidden apps.
+/// Lists apps in /Applications (and ~/Applications) that aren't managed by
+/// Homebrew but match a known cask, and lets the user adopt each one
+/// (`brew install --cask --adopt`). Mirrors the QuarantineSheet structure:
+/// header + re-scan, a scrollable list of rows, and a footer. Per-row actions:
+/// Adopt, Force-adopt (after a version-mismatch), Hide, and a manual cask
+/// override for when the suggested token is wrong. A "Manage Hidden Apps"
+/// disclosure lets the user unhide previously-hidden apps.
 struct AdoptSheet: View {
     @Bindable var metrics: MaintenanceMetrics
     let casks: [CaskMetadata]
@@ -2584,11 +2789,13 @@ struct AdoptSheet: View {
 
 // MARK: - Adopt row
 
-// A single adoptable app: icon, name, suggested cask token, and actions.
-// Tapping "Adopt" runs `brew install --cask --adopt`; if that reports a version
-// mismatch a "Force" button appears to reinstall over it. "Change" reveals a
-// manual token override for when the suggestion is wrong, and "Hide" removes the
-// app from the list (persisted).
+/// A single adoptable app: icon, name, suggested cask token, and actions.
+/// Tapping "Adopt" runs `brew install --cask --adopt`; if that reports a version
+/// mismatch a "Force" button appears to reinstall over it. "Change" reveals a
+/// manual token override for when the suggestion is wrong, and "Hide" removes the
+/// app from the list (persisted). Also runs the "smart" version diagnosis below
+/// that flags a likely-wrong adoption (installed newer/older than the cask, or a
+/// short-vs-long version-number shape) in red before the user commits.
 private struct AdoptRow: View {
     let candidate: BrewCLIService.AdoptCandidate
     @Bindable var metrics: MaintenanceMetrics

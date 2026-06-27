@@ -237,13 +237,18 @@ nonisolated enum FormulaClassifier {
         return ordered
     }
 
-    // Classify a formula into a subcategory display name.
+    /// Classify a formula into a single subcategory display name. Walks the
+    /// rules in declared (specific → broad) order; the first rule that matches
+    /// EITHER a single-word token (exact set membership, cheap) OR a bounded
+    /// phrase (substring with word boundaries) wins. No match → "Undefined".
     static func classify(name: String, desc: String?, homepage: String?) -> String {
         let (combined, words) = soupify(name: name, desc: desc ?? "", homepage: homepage ?? "")
         for rule in rules {
+            // Cheap path: any whole-word keyword present in the token set.
             if !rule.words.isDisjoint(with: words) {
                 return rule.sub
             }
+            // Costlier path: any multi-word phrase present with word boundaries.
             for phrase in rule.phrases where hasPhrase(combined, phrase) {
                 return rule.sub
             }

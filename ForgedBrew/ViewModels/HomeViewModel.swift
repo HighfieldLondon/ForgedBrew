@@ -1,16 +1,36 @@
+//
+//  HomeViewModel.swift
+//  ForgedBrew
+//
+//  Backs the Home / Discover feed (HomeView). A thin, in-memory ranking layer:
+//  it reads the full cask catalog from the local DB and derives the three
+//  ranked lists the home page shows. No network and no pagination of its own —
+//  the heavy catalog refresh lives in AppDataService; this VM only sorts and
+//  slices what is already on disk.
+//
+
 import Foundation
 import SwiftUI
 
 @MainActor
 @Observable
 final class HomeViewModel {
+    /// The single app shown in the hero card — currently the top trending cask.
     var featuredCask: CaskMetadata? = nil
+    /// Top 10 by 30-day install momentum (the "Currently Trending" list/grid).
     var trendingCasks: [CaskMetadata] = []
+    /// Top 10 by 90-day installs (the "3-Month Trend" list). Named "allTime…"
+    /// for historical reasons; it is the 90-day window, not all-time.
     var allTimePopular: [CaskMetadata] = []
+    /// True while load() is fetching + ranking; drives HomeView's spinner.
     var isLoading: Bool = false
 
     init() {}
 
+    /// Rebuilds all three home lists from the on-disk catalog. Pure in-memory
+    /// sort/slice work — fast enough to re-run on appear and after a refresh.
+    /// Errors are swallowed (lists left empty) so a transient DB hiccup never
+    /// blanks or crashes the landing page.
     func load(db: DatabaseManager) async {
         isLoading = true
         defer { isLoading = false }

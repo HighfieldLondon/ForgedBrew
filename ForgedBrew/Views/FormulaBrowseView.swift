@@ -140,11 +140,6 @@ struct FormulaBrowseView: View {
 
     @Environment(AppDataService.self) var appData
 
-    // Install sheet state (reuses the cask InstallLogSheet UI).
-    @State private var showInstallSheet = false
-    @State private var installSheetFormula: FormulaMetadata? = nil
-    @State private var installLog: [String] = []
-    @State private var installTask: Task<Void, Never>? = nil
 
     @State private var scrolledID: FormulaMetadata.ID? = nil
 
@@ -258,13 +253,15 @@ struct FormulaBrowseView: View {
         // Recompute the cached grid data when the view first appears and whenever
         // a real input changes — never on a plain scroll-driven body eval.
         .task(id: recomputeKey) { recomputeViewData() }
-        .sheet(isPresented: $showInstallSheet) {
-            if let formula = installSheetFormula {
-                InstallLogSheet(
-                    caskName: formula.name,
-                    lines: $installLog,
-                    isPresented: $showInstallSheet
-                )
+        // Admin-password prompt for a root-requiring install — mirrors the other
+        // install surfaces so a formula-grid install can answer the sudo prompt
+        // instead of silently hanging.
+        .sheet(item: sudoRequestBinding) { request in
+            SudoPasswordSheet(
+                request: request,
+                validate: { await appData.validateSudoPassword($0) }
+            ) { password in
+                appData.provideSudoPassword(password, for: request)
             }
         }
         .toolbar {
@@ -428,17 +425,34 @@ struct FormulaBrowseView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // Install via the SHARED sudo-aware manager (request the session password
+    // first; cancel aborts), the same path the detail card uses — so a formula
+    // that needs root can answer the prompt instead of hanging on the old no-sudo
+    // stream. Progress shows on the Installed screen.
     private func startInstall(_ formula: FormulaMetadata) {
-        installSheetFormula = formula
-        installLog = []
-        showInstallSheet = true
-        installTask?.cancel()
-        installTask = Task {
-            let stream = appData.installFormula(formula.name)
-            for await line in stream {
-                await MainActor.run { installLog.append(line) }
-            }
-            await MainActor.run { installLog.append("✅ Done") }
+        Task {
+            guard let password = await appData.ensureSessionSudoPassword(
+                verb: "install", subject: formula.name
+            ) else { return }
+            appData.startInstall(
+                token: formula.name,
+                isUpgrade: appData.installedByToken[formula.name]?.isOutdated ?? false,
+                isFormula: true,
+                sudoPassword: password
+            )
         }
+    }
+
+    // Binding over the shared install manager's outstanding sudo request, so the
+    // password sheet presents via `.sheet(item:)`. Nil (dismiss) = cancel.
+    private var sudoRequestBinding: Binding<SudoRequest?> {
+        Binding(
+            get: { appData.pendingSudoRequest },
+            set: { newValue in
+                if newValue == nil, let current = appData.pendingSudoRequest {
+                    appData.provideSudoPassword(nil, for: current)
+                }
+            }
+        )
     }
 }

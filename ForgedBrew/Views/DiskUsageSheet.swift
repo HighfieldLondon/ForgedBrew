@@ -68,6 +68,9 @@ struct DiskUsageSheet: View {
 
     @ViewBuilder
     private var content: some View {
+        // Two states only — unlike the streaming security/vuln scans, the
+        // footprint is measured in one shot (du across the prefix), so we show a
+        // single spinner while measuring and then the full breakdown at once.
         if metrics.footprintMeasuring {
             VStack(spacing: 10) {
                 ProgressView()
@@ -81,6 +84,9 @@ struct DiskUsageSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     totalBlock
                     Divider()
+                    // One row per measured location; fraction(of:) gives each
+                    // row's share of the total so its bar can be drawn
+                    // proportionally without the row knowing the grand total.
                     VStack(spacing: 12) {
                         ForEach(metrics.diskFootprint.components) { component in
                             FootprintRow(component: component,

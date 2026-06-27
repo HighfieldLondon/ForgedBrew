@@ -1,6 +1,42 @@
 import Foundation
 import GRDB
 
+// MARK: - DatabaseManager (GRDB / SQLite persistence)
+//
+// The app's single on-disk store, living at
+// ~/Library/Application Support/ForgedBrew/forgedbrew.db (a GRDB DatabaseQueue,
+// so all access is serialized through one connection). It plays two distinct
+// roles:
+//
+//   1. Catalog CACHE — a local mirror of the Homebrew catalog so the app opens
+//      instantly offline and only hits the network to refresh. The `casks`,
+//      `formulas`, and `installedPackages` tables are disposable: they are
+//      wiped/replaced wholesale on every catalog/install refresh and can be
+//      rebuilt from the Homebrew API at any time.
+//
+//   2. User DATA — the things the user authored and must never lose across a
+//      refresh: `favorites`, `userNotes`, `tags` + `itemTags`, `parkedApps`,
+//      and the GitHub-license cache (`githubMeta`). These are deliberately kept
+//      in their OWN tables (not as columns on the catalog rows) precisely so the
+//      catalog-replace step above can't clobber them.
+//
+// Schema evolution is handled by GRDB's DatabaseMigrator (migrations v1…v10
+// registered in init). GRDB records which migrations have run and NEVER re-runs
+// a completed one, so every schema change must be a new, append-only migration —
+// see the per-migration comments for why several are standalone rather than
+// folded into v1.
+//
+// Declared as an `actor`: the type is the app's serialization point for all DB
+// I/O, and the async read/write API below hops onto the GRDB queue off the main
+// actor so SwiftUI never blocks on disk.
+
+// MARK: - Cask catalog row
+//
+// One row of the `casks` catalog-cache table, with conversions to/from the
+// domain CaskMetadata. Catalog rows are replaced wholesale on every refresh
+// (saveCasks uses INSERT … onConflict .replace), so this record holds only the
+// browse/detail fields — user-authored state (favorite flag aside) lives in
+// separate tables that survive the replace.
 struct CaskRecord: FetchableRecord, PersistableRecord, TableRecord {
     static let databaseTableName = "casks"
 
@@ -62,8 +98,14 @@ struct CaskRecord: FetchableRecord, PersistableRecord, TableRecord {
         container["tapGitHead"] = tapGitHead
     }
 
+    // Builds a row from live catalog metadata. Install counts are passed in
+    // (they come from a separate analytics feed) and the favorite flag / notes
+    // are reset to defaults here because their source of truth is the dedicated
+    // favorites/userNotes tables, not this row.
     init(cask: CaskMetadata, installCount30d: Int = 0, installCount90d: Int = 0, installCount365d: Int = 0) {
         self.token = cask.token
+        // CaskMetadata.name is an array of aliases; persist it as a JSON string
+        // in the single TEXT `name` column (decoded back in toCaskMetadata).
         let encoder = JSONEncoder()
         self.name = (try? String(data: encoder.encode(cask.name), encoding: .utf8)) ?? "[]"
         self.desc = cask.desc
@@ -83,6 +125,10 @@ struct CaskRecord: FetchableRecord, PersistableRecord, TableRecord {
         self.tapGitHead = cask.tapGitHead
     }
 
+    // Reconstructs a CaskMetadata. Because CaskMetadata has no memberwise public
+    // initializer covering every field, we round-trip the row through a JSON dict
+    // and CaskMetadata's Decodable conformance (mirroring the Homebrew API JSON
+    // shape), falling back to a minimal hand-built value if that decode fails.
     func toCaskMetadata() -> CaskMetadata {
         let nameArray: [String]
         if let data = name.data(using: .utf8),
@@ -133,6 +179,12 @@ struct CaskRecord: FetchableRecord, PersistableRecord, TableRecord {
     }
 }
 
+// MARK: - Formula catalog row
+//
+// One row of the `formulas` catalog-cache table. A deliberately lightweight
+// mirror: it stores only the fields browse + detail need (no head version,
+// dependencies, or build deps — see toFormulaMetadata). Keyed by `name`, and
+// like casks it is replaced wholesale on every catalog refresh.
 struct FormulaRecord: FetchableRecord, PersistableRecord, TableRecord {
     static let databaseTableName = "formulas"
 
@@ -207,6 +259,14 @@ struct FormulaRecord: FetchableRecord, PersistableRecord, TableRecord {
     }
 }
 
+// MARK: - Installed-package row
+//
+// One row of the `installedPackages` cache — the locally-known state of a
+// package the user has installed (version, outdated flag, target version, and
+// whether it was installed on request vs pulled in as a dependency). Keyed by
+// (token, type). Rebuilt wholesale from a `brew` scan on every refresh; cached
+// here so the Installed list and "Installed by me" filter render at cold launch
+// before that scan completes.
 struct InstalledRecord: FetchableRecord, PersistableRecord, TableRecord {
     static let databaseTableName = "installedPackages"
     var token: String
@@ -266,10 +326,19 @@ struct InstalledRecord: FetchableRecord, PersistableRecord, TableRecord {
     }
 }
 
+/// The app's single SQLite store, accessed as a shared actor. Owns one GRDB
+/// `DatabaseQueue` (serialized access) and exposes an async read/write API for
+/// the catalog cache and all user data (favorites, notes, tags, parks). All
+/// schema setup runs once in `init` via the registered migrations.
 actor DatabaseManager {
     static let shared = DatabaseManager()
     private let dbQueue: DatabaseQueue
 
+    // Opens (creating if needed) the on-disk database and runs all pending
+    // migrations before the actor is usable. Anything fatal here (no
+    // Application Support dir, open failure, migration failure) aborts launch:
+    // the app cannot function without its store, and continuing would risk
+    // operating on a half-initialized/corrupt DB.
     private init() {
         let fm = FileManager.default
         guard let appSupport = fm.urls(
@@ -285,6 +354,10 @@ actor DatabaseManager {
             try? fm.moveItem(at: legacyDir, to: forgedDir)
         }
         try? fm.createDirectory(at: forgedDir, withIntermediateDirectories: true)
+        // Second leg of the rename: the database file itself was once
+        // "hopsight.db". Move it (and its WAL/SHM sidecars, which must travel
+        // with it or SQLite sees a torn database) to the new "forgedbrew.db"
+        // name, but only if the new file doesn't already exist.
         let legacyDB = forgedDir.appendingPathComponent("hopsight.db")
         let dbURL = forgedDir.appendingPathComponent("forgedbrew.db")
         if fm.fileExists(atPath: legacyDB.path), !fm.fileExists(atPath: dbURL.path) {
@@ -307,6 +380,15 @@ actor DatabaseManager {
 
         var migrator = DatabaseMigrator()
 
+        // v1 establishes the original schema: the cask catalog cache plus the
+        // first user-data and bookkeeping tables.
+        //   • casks            — cask catalog cache (replaced on refresh).
+        //   • installedPackages — locally-known installed state, keyed (token,type).
+        //   • favorites        — user-starred tokens, source of truth for "starred".
+        //   • userNotes        — per-token free-text notes the user authored.
+        //   • installHistory   — append-only log of install/uninstall/upgrade events.
+        //   • analyticsCache   — blob cache for computed analytics, keyed by key.
+        //   • appMetadata      — generic key/value store (refresh timestamps, ETags).
         migrator.registerMigration("v1") { db in
             try db.execute(sql: """
                 CREATE TABLE casks (
@@ -376,6 +458,13 @@ actor DatabaseManager {
                 """)
         }
 
+        // v2 adds full-text search over the cask catalog. `casks_fts` is an
+        // external-content FTS5 index (content=casks): it stores no copy of the
+        // text, just the inverted index, and is seeded from the existing rows.
+        // The three triggers (ai/ad/au) keep the index in lock-step with INSERT/
+        // DELETE/UPDATE on `casks` — the 'delete' sentinel rows are the FTS5
+        // idiom for removing stale terms before re-indexing on update. searchCasks
+        // queries this index.
         migrator.registerMigration("v2") { db in
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE casks_fts USING fts5(
@@ -591,6 +680,11 @@ actor DatabaseManager {
         self.dbQueue = queue
     }
 
+    // MARK: - Cask catalog (read/write)
+
+    // Upserts the full cask catalog. Each row is replaced on token conflict, so
+    // a refresh overwrites stale catalog fields in place; user data in the
+    // separate favorites/notes/tags tables is untouched.
     func saveCasks(_ casks: [CaskMetadata]) async throws {
         try await dbQueue.write { db in
             for cask in casks {
@@ -645,6 +739,9 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Formula catalog (read/write)
+
+    // Upserts the full formula catalog, mirroring saveCasks (replace on `name`).
     func saveFormulas(_ formulas: [FormulaMetadata]) async throws {
         try await dbQueue.write { db in
             for formula in formulas {
@@ -666,9 +763,31 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Search
+
+    // Full-text cask search via the casks_fts index. Each whitespace-separated
+    // term becomes a quoted literal prefix term, ANDed together ("vis stu" finds
+    // "Visual Studio Code"); excludes deprecated rows, caps results at 50. Empty
+    // query returns nothing.
     func searchCasks(query: String) async throws -> [CaskMetadata] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return [] }
+
+        // FTS5 MATCH treats `"`, `(`, `:`, `-`, OR/AND etc. as syntax, so a raw
+        // `trimmed + "*"` blows up on inputs like `c++`, `node-red`, `a OR b`,
+        // or a stray quote — the query throws and the caller silently falls back
+        // to weaker local filtering. Quote EACH whitespace-separated token as its
+        // own literal prefix term (doubling any embedded quote to escape it, with
+        // the prefix `*` OUTSIDE the quote so it stays a prefix query), joined by
+        // spaces so FTS5 ANDs them. This preserves multi-word AND-of-prefixes
+        // matching — "editor code" still finds "Open-source code editor"
+        // (non-adjacent) — while never producing a syntax error. (A single quoted
+        // PHRASE would force the words to be adjacent and in order, missing those.)
+        let terms = trimmed.split(whereSeparator: { $0.isWhitespace })
+        guard !terms.isEmpty else { return [] }
+        let pattern = terms
+            .map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }
+            .joined(separator: " ")
 
         return try await dbQueue.read { db in
             let sql = """
@@ -676,11 +795,16 @@ actor DatabaseManager {
                 JOIN casks_fts ON casks.rowid = casks_fts.rowid
                 WHERE casks_fts MATCH ? AND casks.deprecated = 0 LIMIT 50
                 """
-            let rows = try Row.fetchAll(db, sql: sql, arguments: [trimmed + "*"])
+            let rows = try Row.fetchAll(db, sql: sql, arguments: [pattern])
             return rows.map { CaskRecord(row: $0).toCaskMetadata() }
         }
     }
 
+    // MARK: - Install-count analytics
+
+    // Writes the per-token install counts for one analytics window (30d/90d/365d)
+    // onto the matching casks column. `period` is mapped to a column through a
+    // whitelisted switch; an unrecognized period is a silent no-op.
     func updateInstallCounts(_ counts: [String: Int], period: String) async throws {
         let column: String
         switch period {
@@ -714,6 +838,13 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Favorites
+
+    // Toggles a cask's favorite state. Writes to both places that track it: the
+    // denormalized `isFavorite` flag on the cask row (cheap to read alongside
+    // catalog data) AND the `favorites` table (the membership/ordering source of
+    // truth that survives a catalog replace). Favoriting upserts a favorites row
+    // with a timestamp; unfavoriting deletes it.
     func markFavorite(token: String, isFavorite: Bool) async throws {
         try await dbQueue.write { db in
             try db.execute(
@@ -758,6 +889,8 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Installed packages (cache)
+
     func fetchInstalled() async throws -> [InstalledPackage] {
         try await dbQueue.read { db in
             let records = try InstalledRecord.fetchAll(db)
@@ -765,6 +898,9 @@ actor DatabaseManager {
         }
     }
 
+    // Replaces the cached installed list outright (delete-all then re-insert) so
+    // it exactly mirrors the latest `brew` scan — packages uninstalled outside
+    // the app don't linger. This is the table's whole-table rebuild on refresh.
     func saveInstalled(_ packages: [InstalledPackage]) async throws {
         try await dbQueue.write { db in
             try db.execute(sql: "DELETE FROM installedPackages")
@@ -775,6 +911,11 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Notes
+
+    // Saves (or clears) the per-token user note. A note that trims to empty is
+    // treated as a deletion so it drops out of fetchAllNotes rather than
+    // lingering as a blank row.
     func saveNote(token: String, note: String) async throws {
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
         try await dbQueue.write { db in
@@ -825,6 +966,11 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Refresh bookkeeping & metadata (appMetadata)
+
+    // True when the catalog/data identified by `key` was last refreshed more
+    // than `ttlHours` ago (or never). Backs the "should I re-fetch from the
+    // network?" decision. Reads the "lastRefresh_<key>" appMetadata entry.
     func isDataStale(key: String, ttlHours: Double) async throws -> Bool {
         try await dbQueue.read { db in
             let sql = "SELECT value FROM appMetadata WHERE key = ?"
@@ -872,6 +1018,10 @@ actor DatabaseManager {
         }
     }
 
+    // MARK: - Install history
+
+    // Appends one event to the install-history log (install/uninstall/upgrade),
+    // timestamped. Append-only; never updated or deleted here.
     func logInstallEvent(
         token: String, type: PackageType, action: String, version: String?
     ) async throws {

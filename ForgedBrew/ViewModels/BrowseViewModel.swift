@@ -1,10 +1,27 @@
+//
+//  BrowseViewModel.swift
+//  ForgedBrew
+//
+//  Backs the catalog Browse screen: the filterable, sortable, paginated grid of
+//  every cask. Holds the loaded catalog in memory and re-derives the displayed
+//  list (filteredCasks / subcategorySections / flatVisibleCasks) via
+//  applyFilters() whenever a filter, sort, category, or search term changes. All
+//  filtering/sorting is done in-memory off the loaded `casks`; the DB is only
+//  touched to fetch the catalog and to run the unscoped FTS search.
+//
+
 import Foundation
 import SwiftUI
 
+/// The catalog scopes the browse grid can show. Only `.apps` (casks) exists
+/// today; the enum is kept for the segmented control's shape and future growth.
 enum BrowseScope: String, CaseIterable {
     case apps = "Apps & Casks"
 }
 
+/// The sort options offered in the Browse toolbar. Each maps to a Homebrew
+/// install-count window (or alphabetical), and also tells the list cards which
+/// count + period caption to display (see `installCount(for:)` / `periodLabel`).
 enum SortOrder: String, CaseIterable {
     case trending = "Trending"
     case allTimePopular = "3-Month Trend"
@@ -36,8 +53,15 @@ enum SortOrder: String, CaseIterable {
 }
 
 @MainActor @Observable final class BrowseViewModel {
+    /// The working set the grid filters/sorts over. Normally the full catalog,
+    /// but during an UNSCOPED search it is swapped for the DB FTS result rows
+    /// (see scheduleSearch); applyFilters() always reads from here.
     var casks: [CaskMetadata] = []
+    /// The fully filtered + sorted list actually rendered (after applyFilters()).
     var filteredCasks: [CaskMetadata] = []
+    // Each user-facing control below resets the scroll anchors (so a changed
+    // result set starts at the top) and re-derives the displayed list. searchText
+    // additionally debounces through scheduleSearch() rather than filtering inline.
     var searchText: String = "" { didSet { scrollAnchorID = nil; scrollAnchorSubcategory = nil; scheduleSearch() } }
     var selectedCategory: CaskCategory? = nil { didSet { flatDisplayLimit = Self.flatPageSize; scrollAnchorID = nil; scrollAnchorSubcategory = nil; applyFilters() } }
     // Optional subcategory filter within selectedCategory (set when the user
@@ -45,7 +69,11 @@ enum SortOrder: String, CaseIterable {
     var selectedSubcategory: String? = nil { didSet { scrollAnchorID = nil; scrollAnchorSubcategory = nil; applyFilters() } }
     var selectedScope: BrowseScope = .apps { didSet { applyFilters() } }
     var sortOrder: SortOrder = .alphabetical { didSet { scrollAnchorID = nil; scrollAnchorSubcategory = nil; applyFilters() } }
+    /// True while the initial catalog load() is in flight; drives the grid spinner.
     var isLoading: Bool = false
+    // Mutually-exclusive-ish license filters. showFOSSOnly keeps only casks with
+    // an open-source signal; showCommercialOnly keeps the complement (see the
+    // filter steps in applyFilters for the precise definition).
     var showFOSSOnly: Bool = false { didSet { scrollAnchorID = nil; scrollAnchorSubcategory = nil; applyFilters() } }
     var showCommercialOnly: Bool = false { didSet { scrollAnchorID = nil; scrollAnchorSubcategory = nil; applyFilters() } }
 
@@ -80,7 +108,11 @@ enum SortOrder: String, CaseIterable {
     // subcategory / the top". Cleared alongside scrollAnchorID.
     var scrollAnchorSubcategory: String? = nil
 
+    /// The in-flight debounced search task, cancelled and replaced on each
+    /// keystroke so only the last pause-of-typing actually queries.
     private var searchTask: Task<Void, Never>? = nil
+    /// Retained from load()/search() so the debounced search closure can re-query
+    /// the DB without the caller re-supplying it.
     private var db: DatabaseManager? = nil
 
     // The full catalog, used for in-memory scoped search. A global DB FTS query

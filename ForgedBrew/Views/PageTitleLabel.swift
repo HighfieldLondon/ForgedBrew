@@ -6,6 +6,9 @@ import SwiftUI
 //
 // The icon is sized relative to the title text and kept deliberately small so
 // it reads as a subtle brand mark, not a heavy graphic.
+
+/// Logo-prefixed page heading used across the main screens. The image is marked
+/// `.accessibilityHidden` so VoiceOver reads only the title text, not "image".
 struct PageTitleLabel: View {
     let title: String
 

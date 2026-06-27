@@ -1,7 +1,23 @@
+//
+//  HomeView.swift
+//  ForgedBrew
+//
+//  The Home / Discover landing page and its building-block subviews. Renders two
+//  feeds the segmented toggle swaps between: an Apps feed (featured hero +
+//  trending/3-month ranked lists + a trending grid, driven by HomeViewModel) and
+//  a Formulae feed (a ranked "Most Downloaded" list that expands to the full A–Z
+//  catalog, driven directly off AppDataService.formulae). Navigation out to
+//  detail/browse is delegated upward via the on… callbacks; this view owns no
+//  routing of its own.
+//
+
 import SwiftUI
 import AppKit
 
 // MARK: - SectionHeader
+/// A bold section title with an optional trailing "See More" link. The link is
+/// shown only when `action` is non-nil, so the same header serves both
+/// navigable sections and plain labels.
 struct SectionHeader: View {
     let title: String
     let action: (() -> Void)?
@@ -22,6 +38,10 @@ struct SectionHeader: View {
 }
 
 // MARK: - FeaturedHeroCard
+/// The large two-panel hero at the top of the Apps feed. A discovery surface
+/// only: it shows the featured cask's identity + blurb and a single "Learn More"
+/// action (no Install button — see the inline note on the action). The right
+/// panel adapts its copy to whether the app is already installed.
 struct FeaturedHeroCard: View {
     let cask: CaskMetadata
     // The installed record for this cask (nil == not installed). Drives the
@@ -130,6 +150,10 @@ struct FeaturedHeroCard: View {
 }
 
 // MARK: - TrendingRow
+/// A single ranked cask row (rank number, icon, name + desc, install count) used
+/// by both the "Currently Trending" and "3-Month Trend" lists. The caller passes
+/// the install count and its period label so the same row can show 30d or 90d
+/// figures without the row knowing which list it's in.
 struct TrendingRow: View {
     let rank: Int
     let cask: CaskMetadata
@@ -234,6 +258,10 @@ enum HomeFeedMode: String, CaseIterable {
 }
 
 // MARK: - HomeView
+/// The Home / Discover landing page. Hosts the Apps vs Formulae toggle and the
+/// two feeds below it, owns local scroll/pagination state, and forwards taps to
+/// the parent via the on… callbacks. The Apps feed is fed by `viewModel`; the
+/// Formulae feed reads `appData.formulae` directly.
 struct HomeView: View {
     @State private var viewModel = HomeViewModel()
     @Environment(AppDataService.self) var appData
@@ -305,6 +333,10 @@ struct HomeView: View {
             .scrollTargetLayout()
         }
         .scrollPosition(id: $scrolledID, anchor: .top)
+        // Scroll restoration: on return from a detail page, seed the live
+        // scroll id from the persisted anchor. Deferred to the next runloop tick
+        // because the lazy grid content must exist before .scrollPosition can
+        // resolve the target id.
         .onAppear {
             guard let anchor = scrollAnchor else { return }
             DispatchQueue.main.async { scrolledID = anchor }
@@ -314,9 +346,35 @@ struct HomeView: View {
                 ProgressView()
             }
         }
+        // Build the Apps-feed ranked lists on first appearance. (.task only here;
+        // the Formulae feed self-heals its own load in formulaeFeed.)
         .task {
             await viewModel.load(db: appData.db)
         }
+        // Admin-password prompt for a root-requiring install — mirrors the other
+        // install surfaces so a Home-grid install can answer the sudo prompt
+        // instead of stalling with no sheet bound.
+        .sheet(item: sudoRequestBinding) { request in
+            SudoPasswordSheet(
+                request: request,
+                validate: { await appData.validateSudoPassword($0) }
+            ) { password in
+                appData.provideSudoPassword(password, for: request)
+            }
+        }
+    }
+
+    // Binding over the shared install manager's outstanding sudo request, so the
+    // password sheet presents via `.sheet(item:)`. Nil (dismiss) = cancel.
+    private var sudoRequestBinding: Binding<SudoRequest?> {
+        Binding(
+            get: { appData.pendingSudoRequest },
+            set: { newValue in
+                if newValue == nil, let current = appData.pendingSudoRequest {
+                    appData.provideSudoPassword(nil, for: current)
+                }
+            }
+        )
     }
 
     // Toggle row: segmented Apps/Formulae picker on the left. (The manual
@@ -356,6 +414,8 @@ struct HomeView: View {
     }
 
     // MARK: - Apps feed (original home content)
+    // The cask landing content, top to bottom: category chip row, featured hero,
+    // the two-column Trending / 3-Month ranked lists, and a 12-card trending grid.
     @ViewBuilder
     private var appsFeed: some View {
         VStack(spacing: 24) {
@@ -392,16 +452,30 @@ struct HomeView: View {
                                     installed: appData.installedByToken[cask.token],
                                     installCount: cask.installCount30d,
                                     onTap: { tapped in
+                                        // Persist the current scroll position
+                                        // before navigating so Back returns here.
+                                        // Falls back to the tapped card if no
+                                        // top-most id has been observed yet.
                                         scrollAnchor = scrolledID ?? tapped.id
                                         onCaskTapped?(tapped)
                                     },
-                                    onInstall: {
-                                        // Shared manager (survives navigation;
-                                        // the old discard never ran the install).
-                                        appData.startInstall(
-                                            token: $0.token,
-                                            isUpgrade: appData.installedByToken[$0.token]?.isOutdated ?? false
-                                        )
+                                    onInstall: { cask in
+                                        // Shared sudo-aware manager: request the
+                                        // session admin password first (cancel
+                                        // aborts), then install via the manager that
+                                        // survives navigation. HomeView previously
+                                        // bound no password sheet, so a root-requiring
+                                        // cask stalled on a prompt nothing could show.
+                                        Task {
+                                            guard let password = await appData.ensureSessionSudoPassword(
+                                                verb: "install", subject: cask.displayName
+                                            ) else { return }
+                                            appData.startInstall(
+                                                token: cask.token,
+                                                isUpgrade: appData.installedByToken[cask.token]?.isOutdated ?? false,
+                                                sudoPassword: password
+                                            )
+                                        }
                                     }
                                 )
                                 .id(cask.id)
@@ -414,8 +488,14 @@ struct HomeView: View {
     }
 
     // MARK: - Formulae feed
-    // Top formulae by install count, rendered as a card grid. Tapping a card
-    // opens the formula detail page; install runs the brew formula install.
+    // The CLI-package feed, in three mutually-exclusive states:
+    //   • empty   — loading spinner, or an empty state with a manual reload that
+    //               also self-heals via .task on first appearance.
+    //   • compact — a ranked "Most Downloaded" list (top N by 30-day installs),
+    //               with "Show All" to expand.
+    //   • expanded— the full A–Z catalog as a card grid, paged with "Load More".
+    // Tapping a card opens the formula detail page; install runs the formula
+    // install through the shared manager.
     @ViewBuilder
     private var formulaeFeed: some View {
         if appData.formulae.isEmpty {
@@ -516,15 +596,21 @@ struct HomeView: View {
                             formula: formula,
                             installed: appData.installedByToken[formula.name],
                             onTap: { onFormulaTapped?($0) },
-                            onInstall: {
-                                // Shared manager (survives navigation; the old
-                                // `_ = appData.installFormula(...)` discarded the
-                                // stream so nothing ran).
-                                appData.startInstall(
-                                    token: $0.name,
-                                    isUpgrade: appData.installedByToken[$0.name]?.isOutdated ?? false,
-                                    isFormula: true
-                                )
+                            onInstall: { formula in
+                                // Shared sudo-aware manager: request the session
+                                // admin password first (cancel aborts), then install
+                                // via the manager that survives navigation.
+                                Task {
+                                    guard let password = await appData.ensureSessionSudoPassword(
+                                        verb: "install", subject: formula.name
+                                    ) else { return }
+                                    appData.startInstall(
+                                        token: formula.name,
+                                        isUpgrade: appData.installedByToken[formula.name]?.isOutdated ?? false,
+                                        isFormula: true,
+                                        sudoPassword: password
+                                    )
+                                }
                             }
                         )
                     }
@@ -584,6 +670,10 @@ struct HomeView: View {
         .buttonStyle(.plain)
     }
 
+    // The side-by-side ranked lists: "Currently Trending" (30-day momentum) on
+    // the left and "3-Month Trend" (90-day installs) on the right. Each "See
+    // More" routes to the matching Discover sort; each row taps through to detail
+    // after capturing the scroll anchor.
     private var twoColumnSection: some View {
         HStack(alignment: .top, spacing: 16) {
 

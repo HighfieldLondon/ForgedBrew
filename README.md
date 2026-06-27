@@ -28,7 +28,94 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
-## What's new in 2.3.7
+## What's new in 2.4.1
+
+Sharper, faster **Trust Management Screening** and security scanning ahead of
+Homebrew's **September 1, 2026** cask-quarantine change — plus a broad round of
+cleanup and refinement across the app.
+
+**Trust Management & security scanning**
+
+- **No more false alarms on large apps.** Big application bundles — Microsoft
+  Teams, Word, Excel, Outlook, and Affinity, for example — can take 20–30
+  seconds for macOS to fully assess. Those scans now get the time they need, and
+  a scan that still can't finish is reported as *inconclusive* rather than as a
+  Gatekeeper failure. Healthy, fully-trusted apps no longer appear in the
+  at-risk list.
+- **Online notarization is now recognized.** Some apps are notarized by Apple
+  without stapling the ticket into the app bundle (Microsoft's Office and Edge
+  builds, for example). ForgedBrew now reads macOS Gatekeeper's own verdict, so
+  these correctly show as **notarized** instead of a false "not notarized"
+  warning.
+- **Scans are remembered.** Security and Trust results are now saved with a
+  **"Last scanned…"** timestamp and a **Re-scan** button. Reopening a scan
+  screen shows your most recent results instantly instead of re-running
+  everything; a fresh scan kicks off automatically only when the saved one is
+  more than 24 hours old.
+- **More precise vulnerability severity.** CVE results now carry a proper CVSS
+  v3 severity rating instead of falling back to "Unknown" when an advisory
+  publishes only a CVSS vector.
+
+These scanning changes only make the verdicts *more* accurate — genuinely
+untrusted apps (an invalid signature, or one that was never notarized) are still
+flagged exactly as before.
+
+**Cleanup & refinement**
+
+- **Reliable installs from every screen.** Installing a cask or formula from
+  Home, Browse, Search, or Favorites now uses the same secure, password-aware
+  path as the detail page — so an app that needs administrator rights asks for
+  your password instead of silently stalling.
+- **⌘Q now quits.** With the menu-bar icon enabled, ⌘Q (and the app menu's Quit)
+  now fully quit ForgedBrew; the red close button still tucks it back into the
+  menu bar.
+- **More accurate update detection.** A build-number suffix on one side of a
+  version (e.g. "2.0.1 (4521)") no longer triggers a phantom "update available,"
+  while genuine point releases (2.0 → 2.0.1) are reliably detected.
+- **Better search.** Multi-word searches match again even when the words aren't
+  adjacent, and queries with symbols like `c++` or `node-red` no longer come up
+  empty.
+- **Faster, lighter catalog.** The formula catalog now revalidates with the
+  server and skips a full re-download when nothing changed, and several internal
+  caches are bounded so memory stays in check during long sessions.
+- **Steadier window restore.** ForgedBrew reopens at the size you left it
+  (including after an in-app update) and no longer fights you if you drag the
+  sidebar right after launch.
+- **Under the hood.** A thorough internal documentation pass plus multiple rounds
+  of automated QA hardened correctness, concurrency, and security across the app.
+
+---
+
+## What's new in 2.4.0
+
+A round of cleanup, refinement, bug fixes, and improvements:
+
+- **Fixed a stray spinner** that could briefly appear at the top of the
+  Maintenance scan sheets during Security, Vulnerability, and other streaming
+  scans.
+- **More reliable background refresh** — overlapping refreshes no longer drop
+  results or leave a stale update badge or notification behind.
+- **Tidier, safer install & cleanup** — the install/cleanup log is capped so
+  long operations stay responsive, and background `brew cleanup` is now tracked
+  and cancelled cleanly when a new operation starts.
+- **Fresher details** — analytics, GitHub stars, license, and "last updated"
+  dates refresh efficiently instead of occasionally showing stale values, while
+  the large catalog stays fast.
+- **No more hangs from stuck helpers** — a wedged `mas` or `du` system process
+  can no longer stall a scan; these are now timed out and cleaned up.
+- **Snappier Installed & Updates lists** on large libraries.
+- **More accurate vulnerability severity** — a true "None" rating for items with
+  a CVSS score of 0.0, distinct from "Unknown."
+- **Security hardening** — added protection against server-side request forgery
+  when fetching update info from app metadata, and the optional SerpApi key is
+  no longer retained in the on-disk network cache.
+
+---
+
+<details>
+<summary><strong>Earlier releases</strong></summary>
+
+### 2.3.7
 
 A round of correctness, performance, and reliability polish:
 
@@ -54,6 +141,8 @@ A round of correctness, performance, and reliability polish:
 - **Hardened admin-password handling** and a more accurate description of how
   your password is used, plus a startup-robustness fix so a stale local cache
   entry can never prevent the app from opening.
+
+</details>
 
 ---
 

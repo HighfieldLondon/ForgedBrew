@@ -252,6 +252,9 @@ private struct ManualTermRow: View {
 
 // MARK: - Section model
 
+/// One self-contained chapter of the manual: a heading, prose, optional bullets,
+/// callouts, and a wireframe diagram. The whole manual is just an array of these
+/// (`ManualSection.all`), rendered top-to-bottom and filtered by the search box.
 private struct ManualSection: Identifiable {
     // Stable id used as the scroll anchor and TOC key.
     let id: String
@@ -304,6 +307,8 @@ private struct ManualSection: Identifiable {
     }
 }
 
+/// A single bullet point. Two shapes: a plain line, or a bold "lead" term
+/// followed by an em-dash and description (the two initializers pick which).
 private struct ManualBullet: Identifiable {
     let id = UUID()
     // Optional bold lead-in (e.g. an option name), then the description.
@@ -988,6 +993,10 @@ private struct MarkerBadge: View {
 // wireframe of that screen with numbered markers and a key.
 
 extension ManualSection {
+    // The full, ordered manual. The first few cross-cutting sections (search,
+    // Home, categories, detail card) are spelled out inline here; the rest are
+    // appended from sidebar-grouped arrays below (organization, installed &
+    // updates, maintenance, settings) to keep this declaration readable.
     static let all: [ManualSection] = [
 
         // ===== SEARCH (top of every screen) =====
@@ -1103,7 +1112,7 @@ extension ManualSection {
 }
 
 // MARK: - Organization sections
-
+// The sidebar's "Organization" group: Favorites, Notes & Tags, Parked.
 private let organizationSections: [ManualSection] = [
 
     ManualSection(
@@ -1172,7 +1181,8 @@ private let organizationSections: [ManualSection] = [
 ]
 
 // MARK: - Installed and Updates sections
-
+// The sidebar's "Installed and Updates" group: Installed, Homebrew Updates,
+// and Mac Store / Other Apps.
 private let installedAndUpdatesSections: [ManualSection] = [
 
     ManualSection(

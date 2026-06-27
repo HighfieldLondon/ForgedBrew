@@ -149,6 +149,20 @@ nonisolated struct AdoptNavigationRequest: Equatable, Identifiable {
     let suggestedToken: String?
 }
 
+/// The central, app-wide observable state hub — a `@MainActor` singleton
+/// (`AppDataService.shared`) injected at the SwiftUI root via `.environmentObject`.
+/// It owns the in-memory source of truth that views read directly (the cask/formula
+/// catalogs, the installed inventory, favorites, tags, parked apps, taps, sidebar
+/// counts) and coordinates the lower-level actor services that produce it:
+/// `DatabaseManager` (GRDB persistence), `BrewAPIService` (catalog JSON + analytics),
+/// and `BrewCLIService` (brew subprocess install/upgrade/uninstall). It also OWNS
+/// long-lived install/uninstall operations so they survive view teardown (see the
+/// "Shared install/uninstall manager" section), drives the non-Homebrew app-update
+/// flow via topgrade/mas, and brokers the session admin-password gate.
+///
+/// `@Observable` (not legacy ObservableObject) means any view touching one of the
+/// stored `var`s below re-renders when it changes; everything is `@MainActor`, so
+/// mutations are inherently UI-thread-safe and need no extra synchronization.
 @MainActor
 @Observable
 final class AppDataService {
@@ -400,6 +414,15 @@ final class AppDataService {
     // Operations waiting on an admin password, keyed by SudoRequest id. Resumed
     // by provideSudoPassword once the user supplies (or cancels) the password.
     private var queuedSudoOperations: [UUID: () -> Void] = [:]
+
+    // Which queued sudo request belongs to which token. `pendingSudoRequest` can
+    // only show ONE prompt at a time, so when several operations re-prompt in
+    // quick succession (e.g. a batch upgrade whose shared password was wrong, so
+    // every member fails in turn) the later prompts replace the earlier ones —
+    // leaving those tokens stuck on `.needsPassword` with a dead queued closure
+    // the user can no longer reach. This map lets the batch upgrade discard those
+    // orphaned re-prompts so a row can't hang forever. See discardOrphanedSudoReprompt.
+    private var queuedSudoRequestIDsByToken: [String: UUID] = [:]
 
     // Whether the user has already entered their admin password this session
     // (so the password sheet can show "using your saved password for this
@@ -1191,12 +1214,12 @@ final class AppDataService {
         subcategoryCounts = subCounts
     }
 
-    // Mirrors refreshCasks for formulae. TTL: 6 hours, keyed "formulas". The
-    // Homebrew formula.json endpoint here has no conditional/ETag variant, so
-    // when stale we always fetch + save; when fresh we load from the DB.
-    // `force` (user-initiated Refresh) bypasses the 6-hour TTL, same as
-    // refreshCasks. The formula endpoint has no conditional/ETag variant, so a
-    // forced refresh always re-fetches + re-saves.
+    // Mirrors refreshCasks for formulae. TTL: 6 hours, keyed "formulas". When
+    // stale we issue a CONDITIONAL (ETag / If-None-Match) request so Homebrew can
+    // answer 304 Not Modified and we skip the large formula.json parse + full DB
+    // rewrite when nothing changed; when fresh we just load from the DB. `force`
+    // (user-initiated Refresh) bypasses the 6-hour TTL but STILL benefits from the
+    // 304 fast-path, so a forced refresh on an unchanged catalog stays cheap.
     func refreshFormulas(force: Bool = false) async {
         isLoadingFormulae = true
         do {
@@ -1211,8 +1234,19 @@ final class AppDataService {
             let fetched: [FormulaMetadata]
 
             if isStale {
-                let fresh = try await api.fetchAllFormulas()
-                try await db.saveFormulas(fresh)
+                // Conditional refresh: send the stored ETag so Homebrew can answer
+                // 304 Not Modified and let us skip the large formula.json parse +
+                // full DB rewrite when the formula list is unchanged.
+                let storedETag = (try? await db.getMetadata(key: "etag_formulas")) ?? nil
+                let result = try await api.fetchAllFormulasConditional(etag: storedETag)
+                if let fresh = result.formulas {
+                    // 200 OK — new data; persist rows + ETag.
+                    try await db.saveFormulas(fresh)
+                    if let newETag = result.etag {
+                        try? await db.setMetadata(key: "etag_formulas", value: newETag)
+                    }
+                }
+                // else 304 Not Modified — keep the existing DB rows as-is.
                 try await db.updateRefreshTimestamp(key: "formulas")
                 // Re-read through the DB so deprecated/disabled rows are filtered
                 // out exactly the same way they are on the fresh-cache path.
@@ -1827,6 +1861,17 @@ final class AppDataService {
                 self.installProgress[pkg.token]?.phase = .finished
                 self.scheduleProgressClear(token: pkg.token)
             }
+            // A batch shares ONE password, so a wrong password makes every member
+            // fail and re-prompt — but pendingSudoRequest can only show ONE prompt
+            // at a time, so all but the last re-prompt get replaced and become
+            // unreachable. Discard those orphaned re-prompts (and clear their rows)
+            // so a member can't hang on "needs password" forever; the one prompt
+            // still on screen, if any, is left for the user to answer or cancel.
+            for token in tokens
+            where self.installProgress[token]?.phase == .needsPassword
+                && self.pendingSudoRequest?.token != token {
+                self.discardOrphanedSudoReprompt(token: token)
+            }
             // Safety: clear flags for any tokens that didnt end up pinned
             // (e.g. failed) so the set never leaks entries.
             self.batchManagedClearTokens.subtract(tokens)
@@ -1951,7 +1996,24 @@ final class AppDataService {
                 )
             }
         }
+        // Remember which request this token's re-prompt is, so the batch upgrade
+        // can later discard it if a newer prompt superseded this one on screen.
+        queuedSudoRequestIDsByToken[token] = request.id
         pendingSudoRequest = request
+    }
+
+    // Discards a token's queued sudo re-prompt and clears its placeholder row.
+    // Used by the batch upgrade for a member left stranded on `.needsPassword`
+    // because a later member's re-prompt replaced its (now unreachable) prompt.
+    // Never touches the request currently shown on screen (the caller guards that).
+    private func discardOrphanedSudoReprompt(token: String) {
+        if let id = queuedSudoRequestIDsByToken[token] {
+            queuedSudoOperations[id] = nil
+        }
+        queuedSudoRequestIDsByToken[token] = nil
+        if installProgress[token]?.phase == .needsPassword {
+            installProgress[token] = nil
+        }
     }
 
     // Called by the password sheet. When `password` is non-nil the user
@@ -1962,6 +2024,7 @@ final class AppDataService {
     // is nil on cancel). On cancel we also clear the placeholder HUD entry.
     func provideSudoPassword(_ password: String?, for request: SudoRequest) {
         pendingSudoRequest = nil
+        queuedSudoRequestIDsByToken[request.token] = nil
         let resume = queuedSudoOperations.removeValue(forKey: request.id)
         if let password, !password.isEmpty {
             sessionSudoPassword = password

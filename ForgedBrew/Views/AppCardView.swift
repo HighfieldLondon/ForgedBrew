@@ -1,5 +1,26 @@
+// AppCardView.swift
+//
+// The catalog card: the tile rendered for every cask in the Browse grid and the
+// Home screen's Trending / 3-Month / Past-Year lists. Each card shows the app's
+// icon, name, token, description, category chip, an at-a-glance metadata row, an
+// install count, and an Install/Update/Installed button. Tapping the card (or
+// the "Get" button) opens DetailView; "Update" upgrades in place.
+//
+// This file also houses the small, reusable card building blocks that several
+// surfaces share: the icon resolver (AppIconView) and its colored-letter
+// fallback (AppIconPlaceholder), the install button (InstallButton), the
+// category/metadata pills (CardCategoryChip / CardMetaPill), and the optional
+// banner thumbnail (CardThumbnailView). Every piece is designed to be cheap on a
+// fast scroll: icon, favicon, and thumbnail resolution all run off the main
+// thread and are cache-first, because a LazyVGrid realizes many cards at once
+// during a fling.
+
 import SwiftUI
 
+/// A deterministic colored square showing the app's first letter, used as the
+/// last-resort icon when neither a local .app icon nor a homepage favicon is
+/// available. The color is derived from the token so a given app always gets the
+/// same tile.
 struct AppIconPlaceholder: View {
     let token: String
     let size: CGFloat
@@ -111,12 +132,17 @@ struct AppIconView: View {
     }
 }
 
+/// The three mutually-exclusive states the card's install button can show,
+/// derived from whether the cask is installed and (if so) whether it's outdated.
 enum InstallButtonState {
     case get          // not installed
     case installed    // installed, up to date
     case update       // installed, outdated
 }
 
+/// The capsule action button on a catalog card. Label and color are driven by
+/// `state`; the "Installed" state is disabled because it's a status badge, not a
+/// tappable action (removal happens on the detail page).
 struct InstallButton: View {
     let state: InstallButtonState
     let action: () -> Void
@@ -277,6 +303,13 @@ struct CardThumbnailView: View {
     }
 }
 
+/// One catalog tile. Composes the building blocks above into the grid/list card:
+/// optional banner thumbnail, icon + favorite star, name/token/description, a
+/// category chip, a metadata pill row, and the install-count + action-button
+/// footer. Hover lifts the card (shadow + slight scale); tap opens the detail
+/// page. The card is intentionally self-contained — all data comes from
+/// `CaskMetadata` / `InstalledPackage` plus the caller-supplied install count, so
+/// it does no network work of its own.
 struct AppCardView: View {
     let cask: CaskMetadata
     let installed: InstalledPackage?

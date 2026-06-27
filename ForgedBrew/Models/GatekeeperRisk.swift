@@ -32,8 +32,9 @@ import Foundation
 // One installed cask app that Gatekeeper would reject today. `nonisolated` +
 // Sendable so it can cross the actor boundary from BrewCLIService (an actor) up
 // to the @MainActor UI without isolation warnings under the project's
-// MainActor-default isolation.
-nonisolated struct GatekeeperRisk: Identifiable, Sendable, Hashable {
+// MainActor-default isolation. Codable so the scan result can be cached on disk
+// and reloaded without re-running the underlying (slow) spctl assessment.
+nonisolated struct GatekeeperRisk: Identifiable, Sendable, Hashable, Codable {
     // The .app bundle path is unique per installed app, so it doubles as the
     // stable identity and is exactly what we pass to `xattr -d` to clear the
     // quarantine flag.
@@ -131,8 +132,9 @@ nonisolated enum GatekeeperRiskReason {
 }
 
 // The result of one Trust Maintenance scan: the at-risk apps plus when it ran,
-// so the UI doesn't recompute on every redraw.
-nonisolated struct GatekeeperRiskScanResult: Sendable, Hashable {
+// so the UI doesn't recompute on every redraw. Codable so the whole result
+// persists to the on-disk cache and reloads instantly between launches.
+nonisolated struct GatekeeperRiskScanResult: Sendable, Hashable, Codable {
     let risks: [GatekeeperRisk]
     let scannedAt: Date
 
