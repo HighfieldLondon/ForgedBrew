@@ -299,9 +299,14 @@ private struct GeneralAndUpdatesSettingsTab: View {
     @State private var masInstalled = false
     // True while we're installing `mas` from the inline button.
     @State private var installingMas = false
-    // Whether the `topgrade` CLI is installed. Powers the in-place "Update" /
-    // "Update All Apps" actions on the Mac Store/Other Apps screen; surfaced
-    // here during setup so users can add it up front.
+    // DORMANT (2026-07): the topgrade row is NOT rendered anymore. In-place app
+    // updating was removed from the Mac Store/Other Apps screens (now
+    // awareness-only — see the dormant note in AppDataService "App updates via
+    // topgrade"), so ForgedBrew no longer does this and there's no reason to
+    // prompt users to install topgrade. The row's view code (topgradeRow /
+    // installTopgrade) is kept, unused, for a future in-place-update feature.
+    //
+    // Whether the `topgrade` CLI is installed. (Unused while the row is hidden.)
     @State private var topgradeInstalled = false
     // True while we're installing `topgrade` from the inline button.
     @State private var installingTopgrade = false
@@ -416,7 +421,7 @@ private struct GeneralAndUpdatesSettingsTab: View {
             // actionable button when not — so users can square these away while
             // first setting the app up rather than hunting for them later.
             SettingsCard(title: "System access", systemImage: "lock.shield") {
-                Text("Access and formulae ForgedBrew needs so topgrade can run all of its update functions and tasks.")
+                Text("Access and formulae ForgedBrew needs to scan your Mac and read Mac App Store app versions.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -424,8 +429,10 @@ private struct GeneralAndUpdatesSettingsTab: View {
                 fullDiskAccessRow
                 Divider()
                 masRow
-                Divider()
-                topgradeRow
+                // topgradeRow is intentionally NOT rendered — in-place app updating
+                // is dormant (see the topgrade note above), so there's no reason to
+                // prompt users to install topgrade. The row's view code is retained
+                // for a future in-place-update feature.
             }
 
             // ===== Updates section =====
@@ -649,7 +656,8 @@ private struct GeneralAndUpdatesSettingsTab: View {
     private func refreshSystemAccess() {
         fdaGranted = FullDiskAccess.isGranted()
         masInstalled = AppUpdateService.locateMas() != nil
-        topgradeInstalled = TopgradeService.isInstalled
+        // topgrade probe removed — the topgrade row is no longer shown (in-place
+        // app updating is dormant). Restore this if that feature returns.
     }
 
     // MARK: - System access rows
@@ -759,10 +767,11 @@ private struct GeneralAndUpdatesSettingsTab: View {
         }
     }
 
+    // DORMANT (2026-07): not rendered — see the note on `topgradeInstalled`.
     // topgrade CLI status: green "installed" when present, otherwise an inline
-    // "Install topgrade" button that runs `brew install topgrade`. topgrade is
-    // what powers the in-place "Update" and "Update All Apps" actions on the
-    // Mac Store/Other Apps screen, so this mirrors the mas row right above it.
+    // "Install topgrade" button that runs `brew install topgrade`. topgrade
+    // powered the (now-removed) in-place "Update" / "Update All Apps" actions on
+    // the Mac Store/Other Apps screen. Kept for a future in-place-update feature.
     private var topgradeRow: some View {
         HStack(spacing: 12) {
             Image(systemName: topgradeInstalled ? "checkmark.circle.fill" : "arrow.up.circle")

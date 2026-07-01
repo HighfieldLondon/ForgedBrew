@@ -2,6 +2,14 @@ import Foundation
 
 // MARK: - TopgradeService
 //
+// DORMANT (2026-07): this service is currently UNWIRED. In-place app updating was
+// removed from the Mac Store/Other Apps screens (now awareness-only) because many
+// apps failed silently on update — App Store binding and false "update available"
+// run routines made topgrade/MAS updates unreliable. The file is retained, not
+// deleted, to revisit later for a better topgrade integration. Its only remaining
+// caller is the AppDataService "App updates via topgrade" block (itself dormant)
+// and a status read in Settings.
+//
 // Drives the `topgrade` CLI to perform IN-PLACE updates of non-Homebrew apps
 // (Mac App Store, Sparkle-based, Homebrew casks, Microsoft Office) — the apps
 // surfaced on the "Mac & Other Apps" screen that ForgedBrew previously could only

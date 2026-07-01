@@ -17,6 +17,14 @@ struct ParkedView: View {
     @Environment(AppDataService.self) var appData
     // Parked Mac App Store / Other (non-Homebrew) app updates live in their own
     // service; we surface them here alongside parked Homebrew packages.
+    //
+    // DORMANT (2026-07): non-Homebrew app parking is no longer creatable — the
+    // Park control was removed when the Mac Store/Other Apps screens became
+    // awareness-only (see the dormant note in AppUpdateService "Park / Unpark").
+    // This "non-Homebrew apps parked" subsection is retained so any historical
+    // app-parks stay visible/unparkable, and to revisit alongside a better
+    // topgrade integration. Homebrew package parking (the rest of this screen)
+    // is unaffected.
     @State private var appUpdateService = AppUpdateService.shared
 
     var body: some View {

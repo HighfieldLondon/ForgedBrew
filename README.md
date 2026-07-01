@@ -220,8 +220,9 @@ app:
 - **Installed Apps & Formulae** — everything Homebrew manages on your Mac.
 - **Homebrew Updates** — see every available update and apply them individually
   or all at once.
-- **Mac Store / Other Apps** — ForgedBrew also surfaces updates for apps
-  *outside* Homebrew, so you have one place to keep your whole Mac current.
+- **Mac Store / Other Apps** — ForgedBrew also surfaces *available* updates for
+  apps *outside* Homebrew (Mac App Store and direct downloads), so you can see at
+  a glance what's out of date across your whole Mac and open each app to update it.
 
 ### Maintain & Secure
 - **Maintenance tools** — keep your Homebrew installation healthy (cleanup,

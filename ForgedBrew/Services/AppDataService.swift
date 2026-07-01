@@ -2180,6 +2180,17 @@ final class AppDataService {
     // MARK: - Shared install manager internals
 
     // MARK: - App updates via topgrade
+    //
+    // ─────────────────────────────────────────────────────────────────────────
+    // DORMANT (2026-07): in-place app updating is currently DISABLED / unwired.
+    // The Mac Store/Other Apps screens were made awareness-only because many apps
+    // failed silently on "update" — App Store binding and false "update available"
+    // run routines made topgrade/MAS in-place updates unreliable. Everything below
+    // (startAppUpdate / startMASUpdate / startAllAppUpdates + task machinery) is
+    // retained, NOT deleted, to revisit later for a better topgrade integration.
+    // No UI calls these paths today. (appUpdateProgress itself stays live — Adopt
+    // and Uninstall still write to it.)
+    // ─────────────────────────────────────────────────────────────────────────
 
     // True while a topgrade app update is running for this bundle id.
     func isAppUpdating(bundleID: String) -> Bool {

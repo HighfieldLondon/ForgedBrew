@@ -237,13 +237,17 @@ struct UpdateRowView: View {
                         } label: {
                             Label("Update", systemImage: "arrow.up.circle")
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(isHoveringUpdate ? Color.white : Color.accentColor)
+                                .foregroundStyle(isHoveringUpdate ? Color.white : ActionColors.update)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
                                 .background(
+                                    // Hover darkens slightly (0.85) rather than
+                                    // going to a full-saturation amber, matching
+                                    // the app's PillActionButtonStyle convention
+                                    // so it doesn't read as fluorescent orange.
                                     isHoveringUpdate
-                                        ? AnyShapeStyle(Color.accentColor)
-                                        : AnyShapeStyle(Color.accentColor.opacity(0.12)),
+                                        ? AnyShapeStyle(ActionColors.update.opacity(0.85))
+                                        : AnyShapeStyle(ActionColors.update.opacity(0.12)),
                                     in: Capsule()
                                 )
                         }
@@ -523,16 +527,17 @@ struct UpdatesView: View {
                     } label: {
                         Label("Update Selected", systemImage: "arrow.up.circle")
                             .font(.system(size: 12, weight: .semibold))
-                            // Grey when nothing is selected, darker green when
-                            // something is. White text on green reads clearly;
-                            // muted text on grey signals the inactive state.
+                            // Grey when nothing is selected, amber (the Homebrew
+                            // update colorway) when something is. White text on
+                            // amber reads clearly; muted text on grey signals the
+                            // inactive state.
                             .foregroundStyle(selectedOutdated.isEmpty ? Color.secondary : Color.white)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .background(
                                 selectedOutdated.isEmpty
                                     ? AnyShapeStyle(Color.secondary.opacity(0.20))
-                                    : AnyShapeStyle(Color(red: 0.13, green: 0.55, blue: 0.24)),
+                                    : AnyShapeStyle(ActionColors.update.opacity(0.85)),
                                 in: RoundedRectangle(cornerRadius: 6)
                             )
                     }
@@ -544,8 +549,17 @@ struct UpdatesView: View {
                     } label: {
                         Label("Update All", systemImage: "arrow.up.circle.fill")
                             .font(.system(size: 13, weight: .semibold))
+                            // Manual amber fill instead of .borderedProminent —
+                            // the prominent style over-brightens the tint into a
+                            // fluorescent orange. This renders the true muted
+                            // amber and matches the Update Selected button.
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(ActionColors.update.opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
+                            .opacity(outdated.isEmpty || anyUpgradeInFlight ? 0.5 : 1)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
                     .disabled(outdated.isEmpty || anyUpgradeInFlight)
                 }
             }

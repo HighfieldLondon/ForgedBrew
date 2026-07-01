@@ -9,10 +9,10 @@ import AppKit
 // update available — detected via Sparkle appcasts, GitHub releases, and the
 // `mas` CLI — so the user sees all pending updates in one place.
 //
-// Per row the user can Update (opens the update — App Store page / download URL,
-// since non-brew apps can't be silently upgraded) or Park it (holds the nudge,
-// reusing the same Park / Parked / Unpark model as the brew Updates screen).
-// This is our "App Updates" feature.
+// These apps update themselves (via their own updater or the Mac App Store), so
+// ForgedBrew does NOT try to update them — the screen is awareness that an update
+// exists. Per row the user can Open App (jump to it and update from within) or
+// Uninstall. This is our "App Updates" feature.
 
 // MARK: - AppSortOrder
 //
@@ -84,9 +84,10 @@ struct AppSortMenu: View {
 
 /// The "Mac Store/Other Apps" sidebar screen (and, with `updatesOnly`, its
 /// Updates-only variant). Drives the whole non-Homebrew app surface: scanning,
-/// the category segmented control, the parked section, the per-app rows, the
-/// `mas`-missing prompt, and the multi-select / Update-All batch flows. Reads
-/// its inventory from the shared `AppUpdateService`.
+/// the category segmented control (Installed page only), the per-app rows, and
+/// the `mas`-missing prompt. The rows are awareness-only (Open App / Uninstall);
+/// ForgedBrew doesn't update these apps. Reads its inventory from the shared
+/// `AppUpdateService`.
 struct AppUpdatesView: View {
     @Environment(AppDataService.self) private var appData
     @State private var service = AppUpdateService.shared
@@ -120,11 +121,6 @@ struct AppUpdatesView: View {
     @State private var category: AppCategoryFilter = .all
     // True while we're installing the `mas` CLI from the inline prompt.
     @State private var installingMas = false
-    // Bundle IDs the user has checked in the "Updates available" section, for
-    // the multi-select "Update Selected" batch — mirrors the Homebrew Updates
-    // screen. Only in-place-updatable apps (topgrade-capable) can be selected;
-    // Website-only apps (e.g. GitHub-release) have no checkbox.
-    @State private var selection = Set<String>()
 
     // List ordering for the Mac Store / Other Apps lists. Persisted so the
     // choice sticks across launches. Defaults to Install date (newest first)
@@ -138,26 +134,6 @@ struct AppUpdatesView: View {
         )
     }
 
-    // The updates the user could batch-update in place, scoped to the current
-    // category + search (matches what the "Updates available" section shows and
-    // what "Update All Apps" would act on). Used to drive Select All and to
-    // keep the selection clean as the list changes.
-    private var updatableUpdates: [AppUpdate] {
-        service.visibleUpdates(filter: category)
-            .filter(matchesSearch)
-            .filter { TopgradeService.canUpdateInPlace($0.source) }
-    }
-
-    // Selection scoped to rows that are still updatable + in-place capable, so a
-    // token that leaves the list mid-run is never acted on.
-    private var selectedUpdatable: [AppUpdate] {
-        updatableUpdates.filter { selection.contains($0.bundleID) }
-    }
-
-    private var allUpdatableSelected: Bool {
-        !updatableUpdates.isEmpty && selectedUpdatable.count == updatableUpdates.count
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -168,29 +144,25 @@ struct AppUpdatesView: View {
                 // list. Only shown when the `mas` CLI is missing.
                 masNote
 
-                updateErrorBanner
-
                 if service.isScanning {
                     scanningState
                 } else {
-                    // Segmented control picks the category; the lists below
-                    // show that category's updates (top) and full app list.
-                    Picker("Category", selection: $category) {
-                        ForEach(AppCategoryFilter.allCases) { cat in
-                            Text(cat.title).tag(cat)
+                    // Segmented control picks the category on the Installed
+                    // "Mac Store/Other Apps" page, where it's a useful filter over
+                    // the full inventory. The Updates page is awareness-only and
+                    // just shows every pending app update, so it omits the toggle
+                    // (category stays .all).
+                    if !updatesOnly {
+                        Picker("Category", selection: $category) {
+                            ForEach(AppCategoryFilter.allCases) { cat in
+                                Text(cat.title).tag(cat)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(maxWidth: 360, alignment: .leading)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 360, alignment: .leading)
 
-                    // Parked apps appear ONLY on the Updates page (updatesOnly),
-                    // not on the Installed "Mac Store/Other Apps" page — matching
-                    // how Homebrew shows parks on its Updates screen but not on
-                    // Installed. Keeps the Installed list clean.
-                    if updatesOnly {
-                        parkedSection
-                    }
                     categorySections
                 }
             }
@@ -205,9 +177,9 @@ struct AppUpdatesView: View {
                 await rescan()
             }
         }
-        // Admin-password prompt for app updates that need root (Sparkle apps in
-        // /Applications, pkg-based casks, Office). Mirrors the Homebrew Updates
-        // screen so a topgrade run can authenticate non-interactively via the
+        // Admin-password prompt for the operations here that can need root —
+        // e.g. Adopt (brew install of a matching cask). Mirrors the Homebrew
+        // screens so the brew child can authenticate non-interactively via the
         // SUDO_ASKPASS helper once the user supplies the session password.
         // Sort control lives in the window toolbar, immediately to the LEFT
         // of the shared search field (SwiftUI renders .searchable last/right),
@@ -250,14 +222,12 @@ struct AppUpdatesView: View {
     @ViewBuilder
     private var categorySections: some View {
         let updates = service.visibleUpdates(filter: category).filter(matchesSearch)
-        // On the Updates page, parked apps live in their own section at the
-        // top, so exclude them from "All apps" to avoid showing them twice.
-        // On the Installed page there is no parked section, so we keep parked
-        // apps inline (with a "Parked" badge + Unpark button on the row) —
-        // matching how the Homebrew Installed screen lists parked packages.
+        // The Installed page lists every non-Homebrew app inline (a leftover
+        // parked app just carries its "Parked" badge). App-level parking is no
+        // longer offered from these screens — any historical app parks live on
+        // the shared Parked sidebar screen — so there's nothing to exclude here.
         let apps = appSortOrder.wrappedValue.sorted(
             service.installedApps(filter: category)
-                .filter { updatesOnly ? !service.isParked($0.bundleID) : true }
                 .filter(matchesSearch)
         )
 
@@ -274,29 +244,19 @@ struct AppUpdatesView: View {
         // Updates available
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("Updates available", count: updates.count)
-            // Multi-select batch bar — only on the Updates page, and only when
-            // something updatable is present. Mirrors the Homebrew Updates
-            // screen: Select All / "N selected" / Update Selected.
-            if updatesOnly && !updatableUpdates.isEmpty {
-                selectionBar
-            }
             if updates.isEmpty {
-                Text("No updates available in this category.")
+                Text(updatesOnly
+                     ? "No app updates available."
+                     : "No updates available in this category.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(updates) { update in
-                        // A leading checkbox is shown only on the Updates page
-                        // for apps that can actually be updated in place.
-                        let selectable = updatesOnly && TopgradeService.canUpdateInPlace(update.source)
                         AppUpdateRow(
                             update: update,
                             service: service,
                             inventoryApp: appsByBundleID[update.bundleID],
-                            isSelectable: selectable,
-                            isSelected: selection.contains(update.bundleID),
-                            onToggleSelect: { toggleSelection($0.bundleID) },
                             onUninstalled: { Task { await rescan() } }
                         )
                     }
@@ -304,11 +264,6 @@ struct AppUpdatesView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Keep the selection clean: drop any bundle ID that is no longer in the
-        // updatable list (it just updated, was parked, or filtered out).
-        .onChange(of: updatableUpdates.map(\.bundleID)) { _, ids in
-            selection = selection.intersection(Set(ids))
-        }
 
         // All apps — hidden in updates-only mode so that screen shows only
         // apps with a pending update (parallels the Homebrew Updates screen).
@@ -369,12 +324,6 @@ struct AppUpdatesView: View {
                     }
                     .help("Re-check non-Homebrew apps for available updates")
                     Spacer()
-                    // "Update All" only belongs on the Updates page; the
-                    // Installed ("Mac Store/Other Apps") page lists everything
-                    // and should not offer a bulk update.
-                    if updatesOnly {
-                        updateAllButton
-                    }
                 }
                 Text(subtitle)
                     .font(.title3)
@@ -382,8 +331,8 @@ struct AppUpdatesView: View {
             }
 
             Text(updatesOnly
-                 ? "Apps installed outside Homebrew that have an update available — App Store apps and direct downloads — detected via Sparkle, GitHub releases, the App Store, and Homebrew’s cask catalog. This screen shows only apps with updates; switch to Mac Store/Other Apps to see everything installed. Homebrew-managed packages are handled on the Homebrew Updates screen."
-                 : "Updates for apps installed outside Homebrew — App Store apps and direct downloads — detected via Sparkle, GitHub releases, the App Store, and Homebrew’s cask catalog. Homebrew-managed packages are handled on the Homebrew Updates screen.")
+                 ? "These apps have a newer version available, but they update themselves — not through Homebrew. To update one, open the app and use its built-in updater (usually in its settings), or for a Mac App Store app, open the App Store and update it there. ForgedBrew lists them here so you know an update exists. Homebrew-managed packages are handled on the Homebrew Updates screen."
+                 : "Apps installed outside Homebrew — Mac App Store apps and direct downloads. These update themselves, so ForgedBrew shows them for awareness: open an app to update it from its own settings, or update a Mac App Store app in the App Store. Homebrew-managed packages are handled on the Homebrew Updates screen.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -395,131 +344,6 @@ struct AppUpdatesView: View {
         if service.isScanning { return "Scanning…" }
         let n = service.visibleUpdates().count
         return n == 1 ? "1 app update available" : "\(n) app updates available"
-    }
-
-    // MARK: Update Selected (multi-select batch bar)
-
-    // The Select All / "N selected" / Update Selected bar, shown above the
-    // "Updates available" list on the Updates page. Mirrors the Homebrew
-    // Updates screen so the two update screens behave the same.
-    @ViewBuilder
-    private var selectionBar: some View {
-        let running = appData.isUpdatingAllApps
-        HStack(spacing: 12) {
-            Button(allUpdatableSelected ? "Deselect All" : "Select All") {
-                if allUpdatableSelected {
-                    selection.removeAll()
-                } else {
-                    selection = Set(updatableUpdates.map(\.bundleID))
-                }
-            }
-            .font(.system(size: 12, weight: .medium))
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .disabled(running)
-
-            Text("\(selectedUpdatable.count) selected")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button {
-                updateSelected()
-            } label: {
-                Label("Update Selected", systemImage: "arrow.up.circle")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(selectedUpdatable.isEmpty ? Color.secondary : Color.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(
-                        selectedUpdatable.isEmpty
-                            ? AnyShapeStyle(Color.secondary.opacity(0.20))
-                            : AnyShapeStyle(Color(red: 0.13, green: 0.55, blue: 0.24)),
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedUpdatable.isEmpty || running || !TopgradeService.isInstalled)
-            .help(TopgradeService.isInstalled
-                  ? Text(verbatim: "Update the selected App Store / Sparkle / Homebrew-cask apps in place using topgrade")
-                  : Text(verbatim: "Install topgrade (brew install topgrade) to update apps in place"))
-        }
-    }
-
-    // Toggles a bundle ID in/out of the selection.
-    private func toggleSelection(_ bundleID: String) {
-        if selection.contains(bundleID) {
-            selection.remove(bundleID)
-        } else {
-            selection.insert(bundleID)
-        }
-    }
-
-    // Prompts once for the session admin password (cancel aborts), then runs an
-    // aggregate topgrade pass over just the SELECTED updatable apps.
-    private func updateSelected() {
-        let updates = selectedUpdatable
-        guard !updates.isEmpty else { return }
-        Task {
-            guard let password = await appData.ensureSessionSudoPassword(
-                verb: "update", subject: "the selected apps"
-            ) else { return }
-            appData.startAllAppUpdates(updates, sudoPassword: password)
-        }
-    }
-
-    // MARK: Update All
-
-    // Header action: update every non-Homebrew app in place via topgrade. Shows
-    // a single live status while the aggregate run is in flight. Disabled while
-    // scanning, when there's nothing to update, or while a run is already going.
-    @ViewBuilder
-    private var updateAllButton: some View {
-        let progress = appData.appUpdateProgress[AppDataService.allAppsUpdateKey]
-        let running = appData.isUpdatingAllApps
-        let updatableCount = service.visibleUpdates().filter {
-            TopgradeService.canUpdateInPlace($0.source)
-        }.count
-
-        if let progress, progress.isActive || running {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text(progress.statusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            Button {
-                updateAllApps()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                    Text("Update All Apps")
-                }
-                .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(PillActionButtonStyle(tint: ActionColors.update))
-            .disabled(service.isScanning || updatableCount == 0 || !TopgradeService.isInstalled)
-            .help(TopgradeService.isInstalled
-                  ? Text(verbatim: "Update every App Store, Sparkle, and Homebrew-cask app in place, plus Microsoft Office, using topgrade")
-                  : Text(verbatim: "Install topgrade (brew install topgrade) to update all apps in place"))
-        }
-    }
-
-    // Prompts once for the session admin password (cancel aborts), then runs the
-    // aggregate topgrade update across every updatable source.
-    private func updateAllApps() {
-        let updates = service.visibleUpdates().filter {
-            TopgradeService.canUpdateInPlace($0.source)
-        }
-        guard !updates.isEmpty else { return }
-        Task {
-            guard let password = await appData.ensureSessionSudoPassword(
-                verb: "update", subject: "your apps"
-            ) else { return }
-            appData.startAllAppUpdates(updates, sudoPassword: password)
-        }
     }
 
     // MARK: States
@@ -549,68 +373,6 @@ struct AppUpdatesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    // A top-of-page banner shown when an in-place update has errored this
-    // session. Some apps (e.g. OneDrive) can't be reliably updated through
-    // topgrade due to versioning, permissions, or self-managed updaters — so
-    // we explain that and point the user to park the app (which removes it from
-    // the updates list) and update it from within the app itself instead.
-    // Builds a single Text combining the failed app names, comma-separated,
-    // each rendered red + semibold so they stand out inside the warning copy.
-    private func redNameList(_ names: [String]) -> Text {
-        guard let first = names.first else { return Text("") }
-        var result = Text(first).foregroundStyle(.red).fontWeight(.semibold)
-        for name in names.dropFirst() {
-            result = result
-                + Text(", ").foregroundStyle(.secondary)
-                + Text(name).foregroundStyle(.red).fontWeight(.semibold)
-        }
-        return result
-    }
-
-    @ViewBuilder
-    private var updateErrorBanner: some View {
-        let names = service.updateErrorAppNames()
-        if !names.isEmpty {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.system(size: 16))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Some apps can't be updated here")
-                        .font(.system(size: 13, weight: .semibold))
-                    // Compose the message so each FAILED APP NAME pops in red +
-                    // bold, while the explanatory copy stays secondary gray.
-                    // Works for one name or many (the names arrive as a list and
-                    // are joined with ", " here, each segment colored red).
-                    (
-                        Text("ForgedBrew couldn't update ")
-                            .foregroundStyle(.secondary)
-                        + redNameList(names)
-                        + Text(" in place. Some apps can't be updated this way - because of versioning, permissions, or because they manage their own updates. For these, open the app and use its built-in update function instead. To stop the failed update from showing here, Park the app and it won't appear in your updates list going forward.")
-                            .foregroundStyle(.secondary)
-                    )
-                    .font(.system(size: 12))
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Button {
-                    service.clearAllUpdateErrors()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Dismiss this message")
-            }
-            .padding(12)
-            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.orange.opacity(0.45), lineWidth: 1)
-            )
-        }
     }
 
     // An informational note when the `mas` CLI isn't installed, explaining why
@@ -662,36 +424,14 @@ struct AppUpdatesView: View {
         }
     }
 
-    // MARK: Parked section
-
-    @ViewBuilder
-    private var parkedSection: some View {
-        let parked = service.parkedList()
-        if !parked.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Parked app updates", systemImage: "parkingsign.circle")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("These app updates are held out of the lists below. ForgedBrew keeps checking, so a parked app reappears when a newer version ships or its hold expires.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                LazyVStack(spacing: 10) {
-                    ForEach(parked) { record in
-                        ParkedAppUpdateRow(record: record, service: service)
-                    }
-                }
-                Divider().padding(.top, 4)
-            }
-        }
-    }
 }
 
 // MARK: - Update row
 
-/// One app row in the "Updates available" / "All apps" lists. Shows icon, name,
-/// source badge, version delta, and the per-app actions (Update in place, Open
-/// App, Park, Uninstall, plus a leading checkbox when `isSelectable`). Receives
-/// its matching inventory app (for size + date) pre-resolved by the parent.
+/// One app row in the "Updates available" list. Shows icon, name, source badge,
+/// version delta, and the per-app actions (Open App, Uninstall — awareness-only,
+/// since ForgedBrew doesn't update these apps). Receives its matching inventory
+/// app (for size + date) pre-resolved by the parent.
 private struct AppUpdateRow: View {
     let update: AppUpdate
     let service: AppUpdateService
@@ -700,22 +440,9 @@ private struct AppUpdateRow: View {
     // via a bundle-id map and passed in — so the row never linear-scans
     // service.allApps. nil when no match was found.
     var inventoryApp: InstalledApp? = nil
-    // Whether this row sits in the selectable "Updates available" section on the
-    // Updates page (carries a leading multi-select checkbox). Defaults off so
-    // the "All apps" / Installed uses of this row are unaffected.
-    var isSelectable: Bool = false
-    // Multi-select state (only meaningful when isSelectable).
-    var isSelected: Bool = false
-    var onToggleSelect: (AppUpdate) -> Void = { _ in }
     // Called after a successful uninstall so the parent rescans the list.
     let onUninstalled: () -> Void
     @Environment(AppDataService.self) private var appData
-
-    @State private var isHoveringPark = false
-    // A plain Button + confirmationDialog (instead of a Menu) so the Park
-    // control gets a reliable hover effect on macOS.
-    @State private var showParkOptions = false
-    @State private var showParkDurationOptions = false
 
     // App icon, resolved OFF the main thread (AppIconService.resolvedIcon(path:))
     // and held in @State so a fast scroll re-evaluating `body` never re-runs the
@@ -724,20 +451,6 @@ private struct AppUpdateRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Leading multi-select checkbox (Updates available section only),
-            // matching the Homebrew Updates row.
-            if isSelectable {
-                Button {
-                    onToggleSelect(update)
-                } label: {
-                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 16))
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 2)
-            }
-
             appIcon
 
             VStack(alignment: .leading, spacing: 3) {
@@ -768,26 +481,10 @@ private struct AppUpdateRow: View {
                     updateProgressHUD(progress)
                 } else {
                     HStack(spacing: 8) {
-                        // Update: actually performs the in-place update via
-                        // topgrade, scoped to this app's source. Hidden for
-                        // GitHub-release apps (no topgrade step) — those keep
-                        // only the Website path.
-                        if TopgradeService.canUpdateInPlace(update.source) {
-                            Button {
-                                updateInPlace()
-                            } label: {
-                                Text("Update")
-                            }
-                            .buttonStyle(PillActionButtonStyle(tint: ActionColors.update))
-                            .disabled(!TopgradeService.isInstalled)
-                            .help(TopgradeService.isInstalled
-                                  ? Text(verbatim: "Update \(update.appName) in place using topgrade")
-                                  : Text(verbatim: "Install topgrade (brew install topgrade) to update in place"))
-                        }
-
-                        // Open App: launch the app so the user can use its own
-                        // built-in updater. The honest path for apps we can't
-                        // update in place (e.g. homebrewCask-detected apps).
+                        // Open App: launch the app so the user can update it from
+                        // its own built-in updater (or, for a Mac App Store app,
+                        // the App Store). ForgedBrew can't update these in place —
+                        // this list is awareness that an update exists.
                         Button {
                             service.openApp(for: update)
                         } label: {
@@ -795,8 +492,6 @@ private struct AppUpdateRow: View {
                         }
                         .buttonStyle(PillActionButtonStyle(tint: Color.accentColor))
                         .help("Open \(update.appName) so you can update it from within the app itself")
-
-                        parkMenu
 
                         UninstallAppButton(
                             appPath: update.appPath,
@@ -907,67 +602,6 @@ private struct AppUpdateRow: View {
         AppOperationHUD(progress: progress, appStoreUpdate: update, service: service)
     }
 
-    // Performs the in-place update for this app. Prompts once for the session
-    // admin password (cancel aborts); mas apps simply never invoke sudo so the
-    // password is harmless there.
-    private func updateInPlace() {
-        guard !appData.isAppUpdating(bundleID: update.bundleID) else { return }
-        // Mac App Store apps take a dedicated path: `mas upgrade <id>` directly,
-        // no sudo. On failure the HUD shows a precise App Store message and the
-        // row exposes an "Open App Store" button (deep-link to the app).
-        if update.source == .appStore {
-            appData.startMASUpdate(update)
-            return
-        }
-        Task {
-            guard let password = await appData.ensureSessionSudoPassword(
-                verb: "update", subject: update.appName
-            ) else { return }
-            appData.startAppUpdate(update, sudoPassword: password)
-        }
-    }
-
-    // Park menu: pick how long to hold this app's update. Mirrors the brew
-    // Updates screen's Park control.
-    private var parkMenu: some View {
-        Button {
-            showParkOptions = true
-        } label: {
-            Label("Park", systemImage: "parkingsign.circle")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isHoveringPark ? Color.white : Color.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    isHoveringPark
-                        ? AnyShapeStyle(Color.secondary)
-                        : AnyShapeStyle(Color.secondary.opacity(0.12)),
-                    in: Capsule()
-                )
-        }
-        .buttonStyle(.plain)
-        .onHover { isHoveringPark = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHoveringPark)
-        .help("Hold this update: keep your current version and stop showing it here until you unpark or a newer version ships")
-        .confirmationDialog("Park \(update.appName)",
-                            isPresented: $showParkOptions,
-                            titleVisibility: .visible) {
-            Button("Indefinitely") { service.park(update, parkType: .indefinite) }
-            Button("Until next version") { service.park(update, parkType: .untilNextVersion) }
-            Button("For a set time") { showParkDurationOptions = true }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Hold this update and stop showing it here until you unpark or a newer version ships.")
-        }
-        .confirmationDialog("Park for how long?",
-                            isPresented: $showParkDurationOptions,
-                            titleVisibility: .visible) {
-            Button("1 day")   { service.park(update, parkType: .duration, duration: .oneDay) }
-            Button("1 week")  { service.park(update, parkType: .duration, duration: .oneWeek) }
-            Button("1 month") { service.park(update, parkType: .duration, duration: .oneMonth) }
-            Button("Cancel", role: .cancel) { }
-        }
-    }
 }
 
 // MARK: - Installed app row (full list)
@@ -1016,11 +650,9 @@ private struct InstalledAppRow: View {
             if let progress = appData.appUpdateProgress[app.bundleID] {
                 AppOperationHUD(progress: progress)
             } else {
-            // Action set (consistent with the Updates section): Open App,
-            // Adopt (when a cask matches), Website (when a URL is known),
-            // Uninstall. A parked app additionally surfaces Unpark; the old
-            // in-place "Update" button (which only opened a URL) is gone —
-            // Open App / Website are the honest equivalents.
+            // Action set: Open App + Uninstall (plus Adopt next to the name when
+            // a cask matches). These apps update themselves, so ForgedBrew only
+            // surfaces awareness of an update — Open App is the honest path.
             HStack(spacing: 8) {
                 // "Up to date" stays as a quiet status hint when there's no
                 // pending update, so the row still reads as current at a glance.
@@ -1029,16 +661,6 @@ private struct InstalledAppRow: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.green)
                         .labelStyle(.titleAndIcon)
-                }
-
-                if service.isParked(app.bundleID) {
-                    Button {
-                        service.unpark(app.bundleID)
-                    } label: {
-                        Label("Unpark", systemImage: "play.circle")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .help("Return this app to the normal update flow.")
                 }
 
                 // Open App — launch the app so the user can use its own updater.

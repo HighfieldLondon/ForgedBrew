@@ -45,6 +45,13 @@ final class AppUpdateService {
     // version. Surfaced in the view as an informational note.
     var masAvailable = false
 
+    // DORMANT (2026-07): in-place update error tracking. The Mac Store/Other Apps
+    // screens are now awareness-only (in-place updating was unreliable — apps
+    // failed silently under App Store binding / false update-run routines), so
+    // nothing records into these anymore. Retained to revisit alongside a better
+    // topgrade integration. See the dormant note in AppDataService "App updates
+    // via topgrade".
+    //
     // Bundle ids whose most recent in-place update attempt failed this session.
     // Drives the "some apps can't be updated this way — park them" banner on
     // the Mac Store/Other Apps screen. Memory-only and cleared when the user
@@ -263,6 +270,14 @@ final class AppUpdateService {
     }
 
     // MARK: - Park / Unpark (UserDefaults-backed)
+    //
+    // DORMANT (2026-07): app-level parking is currently unwired — the Park control
+    // was removed when the Mac Store/Other Apps screens became awareness-only (see
+    // the topgrade dormant note in AppDataService). No UI creates new app-parks
+    // today; this model + the Parked sidebar's app subsection are retained to
+    // revisit alongside a better topgrade integration. NOTE: Homebrew package
+    // parking is a SEPARATE system (AppDataService / UpdatesView) and stays fully
+    // active — this note is only about non-Homebrew app parking.
 
     func isParked(_ bundleID: String) -> Bool { parked[bundleID] != nil }
 
