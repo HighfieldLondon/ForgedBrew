@@ -1163,8 +1163,11 @@ struct MaintenanceView: View {
                 HomebrewStatusBanner(metrics: metrics, cli: appData.cli)
                     .padding(.horizontal, 20)
 
-                // Health Score Panel
-                HStack(alignment: .center, spacing: 24) {
+                // Health + Diagnostics panel — the health ring and its summary on
+                // the left, brew-doctor Diagnostics filling the space to the right.
+                // (Diagnostics used to be a full-width row below; moved in here to
+                // use the empty right half of the card and cut the page's scroll.)
+                HStack(alignment: .top, spacing: 24) {
                     HealthRing(score: healthScore)
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -1188,7 +1191,13 @@ struct MaintenanceView: View {
                         }
                     }
 
-                    Spacer()
+                    // Compact Diagnostics status always fills the space to the
+                    // right of the ring (clean → "ready to brew"; issues → a short
+                    // warning recap), so the card is never half-empty. The itemized
+                    // findings render full-width below when there are issues.
+                    Divider()
+                    doctorStatusPanel
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(20)
                 .background(.background)
@@ -1196,8 +1205,11 @@ struct MaintenanceView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.separator, lineWidth: 0.5))
                 .padding(.horizontal, 20)
 
-                // Brew doctor — itemized findings
-                doctorSection
+                // Itemized brew-doctor findings, full-width, only when not clean.
+                if !(metrics.doctorReport?.isClean ?? true) {
+                    doctorFindingsDetail
+                        .padding(.horizontal, 20)
+                }
 
                 // Two-column action layout: general upkeep on the left,
                 // security checks on the right. Cards are full-width rows within
@@ -1929,38 +1941,35 @@ struct MaintenanceView: View {
     }
 
     // MARK: - Doctor section
+    //
+    // Two pieces. doctorStatusPanel is the compact header + one-line status that
+    // always rides to the right of the health ring (clean → "ready to brew";
+    // issues → a short warning recap). doctorFindingsDetail is the itemized list,
+    // rendered full-width BELOW the health card only when there are issues — so
+    // the findings and the wide untrusted-taps layout get room instead of cramming
+    // into the half-width column beside the ring.
 
     @ViewBuilder
-    private var doctorSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var doctorStatusPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Text("Diagnostics")
                     .font(.title3)
                     .fontWeight(.bold)
-                // Re-run sits just to the right of the section title.
                 PageRefreshButton("Re-run", isWorking: metrics.doctorLoading, size: .compact) {
                     Task { await metrics.loadDoctor(cli: appData.cli) }
                 }
                 Spacer()
             }
-            // A one-line, plain-language recap that NAMES the issues brew doctor
-            // found, so the user knows exactly what the cards below are about
-            // instead of scanning a long page. Hidden while loading or clean.
-            if !metrics.doctorLoading,
-               let report = metrics.doctorReport,
-               !report.isClean {
-                let labels = report.findings.map { Self.doctorIssueLabel(for: $0) }
-                let n = labels.count
-                Text("^[\(n) issue](inflect: true) to review: \(labels.joined(separator: ", "))")
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             if metrics.doctorLoading {
                 HStack(spacing: 8) {
                     ProgressView().scaleEffect(0.7)
                     Text("Running brew doctor…")
+                    Spacer(minLength: 0)
                 }
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
             } else if let report = metrics.doctorReport {
                 if report.isClean {
@@ -1971,46 +1980,55 @@ struct MaintenanceView: View {
                         detail: "No issues found by brew doctor."
                     )
                 } else {
-                    // Three-tier severity:
-                    //  • brew said "ready to brew" -> the findings are non-fatal
-                    //    WARNINGS: yellow caution icon, plus a green "ready"
-                    //    confirmation row beneath them.
-                    //  • brew did NOT say "ready" -> the findings are FATAL
-                    //    errors that actually block Homebrew: red error icon,
-                    //    and no green confirmation.
+                    // Compact recap only — the itemized findings render full-width
+                    // below, and the issue names are already in the health summary,
+                    // so don't repeat the whole list here.
                     let isFatal = !report.systemReady
-                    let icon = isFatal ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
-                    let tint: Color = isFatal ? .red : .yellow
-                    VStack(spacing: 8) {
-                        ForEach(report.findings) { finding in
-                            if !finding.untrustedTaps.isEmpty {
-                                untrustedTapsFinding(finding)
-                            } else if Self.isCleanupFixable(finding) {
-                                cleanupFixableRow(finding, tint: tint, icon: icon)
-                            } else {
-                                doctorRow(
-                                    icon: icon,
-                                    iconColor: tint,
-                                    title: finding.occurrences > 1
-                                        ? "\(finding.title)  (×\(finding.occurrences))"
-                                        : finding.title,
-                                    detail: finding.detail
-                                )
-                            }
-                        }
-                        // brew said the system is "ready to brew" even though it
-                        // also printed the warning(s) above — they are non-fatal.
-                        // Mirror brew by reassuring the user the system still
-                        // works, in green beneath the warnings.
-                        if report.systemReady {
-                            doctorRow(
-                                icon: "checkmark.seal.fill",
-                                iconColor: .green,
-                                title: "Your system is ready to brew",
-                                detail: "The warning(s) above are non-fatal — Homebrew still works normally."
-                            )
-                        }
+                    let n = report.findings.count
+                    doctorRow(
+                        icon: isFatal ? "xmark.octagon.fill" : "exclamationmark.triangle.fill",
+                        iconColor: isFatal ? .red : .yellow,
+                        title: "\(n) issue\(n == 1 ? "" : "s") to review",
+                        detail: "See the details below."
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var doctorFindingsDetail: some View {
+        if let report = metrics.doctorReport, !report.isClean {
+            // Three-tier severity: brew said "ready to brew" -> non-fatal WARNINGS
+            // (yellow) with a green "ready" confirmation beneath; brew did NOT say
+            // ready -> FATAL errors (red) that block Homebrew, no green confirmation.
+            let isFatal = !report.systemReady
+            let icon = isFatal ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
+            let tint: Color = isFatal ? .red : .yellow
+            VStack(spacing: 8) {
+                ForEach(report.findings) { finding in
+                    if !finding.untrustedTaps.isEmpty {
+                        untrustedTapsFinding(finding)
+                    } else if Self.isCleanupFixable(finding) {
+                        cleanupFixableRow(finding, tint: tint, icon: icon)
+                    } else {
+                        doctorRow(
+                            icon: icon,
+                            iconColor: tint,
+                            title: finding.occurrences > 1
+                                ? "\(finding.title)  (×\(finding.occurrences))"
+                                : finding.title,
+                            detail: finding.detail
+                        )
                     }
+                }
+                if report.systemReady {
+                    doctorRow(
+                        icon: "checkmark.seal.fill",
+                        iconColor: .green,
+                        title: "Your system is ready to brew",
+                        detail: "The warning(s) above are non-fatal — Homebrew still works normally."
+                    )
                 }
             }
         }
@@ -2077,8 +2095,9 @@ struct MaintenanceView: View {
             .disabled(cleanupFixRunning)
             .fixedSize()
         }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
     }
 
@@ -2097,8 +2116,9 @@ struct MaintenanceView: View {
             }
             Spacer(minLength: 0)
         }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
     }
     // MARK: - Untrusted taps (two-box layout)

@@ -28,6 +28,27 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.3
+
+Refinements to the update experience and the Maintenance screen.
+
+- **Mac Store / Other Apps are now awareness-only.** ForgedBrew still detects and
+  shows when your non-Homebrew apps (Mac App Store and direct downloads) have an
+  update — but it no longer tries to update them in place, because that path was
+  unreliable: it could report success without the app actually updating. To
+  update one, open the app and use its own updater, or update a Mac App Store app
+  in the App Store. Deeper in-place update support is planned for a future release.
+- **Consistent update styling.** The per-row Update, Update Selected, and Update
+  All buttons on the Homebrew Updates screen now share the same warm Homebrew
+  amber, tuned so it reads as calm rather than fluorescent.
+- **Tidier Maintenance screen.** brew-doctor Diagnostics now sits beside the
+  health ring (less scrolling), and when it finds issues they're listed as clean,
+  clearly-bordered cards.
+- **Under the hood.** Added an automated test suite covering the risky
+  update-detection, security, and version-comparison logic.
+
+---
+
 ## What's new in 2.4.2
 
 A focused follow-up to 2.4.1 that widens the security scan and fixes a cosmetic
