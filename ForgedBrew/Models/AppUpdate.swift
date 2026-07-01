@@ -2,34 +2,22 @@ import Foundation
 
 // MARK: - Non-Homebrew App Updates model
 //
-// ForgedBrew's "App Updates" sidebar surfaces updates for apps that are NOT managed
-// by Homebrew — Mac App Store installs and direct-download apps — so the user
-// can see everything that needs updating in one place and either Update (open
-// the update) or Park it (hold the nudge), the same way the brew Updates screen
-// works. This is our "App Updates" / "Third-Party App Updates" design outline
-// (Sparkle update checking, appcast XML parsing, outdated MAS apps, and a
-// persisted set of ignored app updates).
+// Models for the "Mac Store/Other Apps" screens — apps Homebrew doesn't manage.
+// We detect an available update from three sources:
+//   • Sparkle   — app ships an SUFeedURL; fetch its appcast, compare the newest
+//                 published version against the installed CFBundleShortVersionString.
+//   • GitHub    — feed/homepage points at a repo; read the latest release tag.
+//   • App Store — app carries a _MASReceipt. Reading the available version needs
+//                 the `mas` CLI; without it we still list the app, just with no target.
 //
-// We detect updates from three sources:
-//   • Sparkle   — the app ships an SUFeedURL in its Info.plist; we fetch its
-//                 appcast XML and compare the newest published version against
-//                 the installed CFBundleShortVersionString.
-//   • GitHub    — the app's feed/homepage points at a GitHub repo; we read the
-//                 latest release tag.
-//   • App Store — the app carries a _MASReceipt; it's a Mac App Store install.
-//                 (Reading the "available" version needs the `mas` CLI; when mas
-//                 isn't present we still list it and route Update to the App
-//                 Store (our "mas not installed" behavior).)
+// We don't update these apps in place — the screens are awareness-only, so the
+// user opens the app (or the App Store) to update it. Why: see the dormant
+// topgrade note in AppDataService.
 //
-// Because non-Homebrew apps can't be silently upgraded the way `brew upgrade`
-// does, "Update" opens the update (App Store page / download URL) rather than
-// installing in place.
-//
-// All types are nonisolated so they cross the detection actor → @MainActor view
-// boundary under the project's SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor.
+// All types are nonisolated to cross the detection actor → @MainActor boundary
+// (SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor).
 
-// Where an app's update came from. Drives the row's source badge and what the
-// Update button does.
+// Where we detected the update. Drives the row's source badge.
 nonisolated enum AppUpdateSource: String, Codable, Sendable, Hashable, CaseIterable {
     case sparkle
     case github
@@ -77,23 +65,17 @@ nonisolated struct AppUpdate: Identifiable, Sendable, Hashable {
     // Optional release-notes link (Sparkle releaseNotesLink / GitHub release).
     let releaseNotesURL: URL?
 
-    // The Homebrew cask token that provides this app, when the cask catalog
-    // has a match (homebrewCask-sourced updates always do). Drives the row's
-    // "Adopt" button so the user can hand the app to Homebrew for future
-    // management instead of relying on a (failing) in-place update. nil ==
-    // no matching cask (e.g. Sparkle/GitHub/App Store apps with no cask).
-    // Defaulted so existing call sites stay source-compatible.
+    // The Homebrew cask that provides this app, if the catalog has a match.
+    // Drives the row's "Adopt" button (hand the app to Homebrew). nil when no
+    // cask matches. Defaulted so existing call sites stay source-compatible.
     var suggestedToken: String? = nil
 
-    // Mac App Store numeric product id (adamID), when known from `mas`. Lets us
-    // (a) attempt a silent `mas upgrade <id>` and (b) deep-link straight to this
-    // app's App Store page (macappstore://apps.apple.com/app/id<storeID>) if the
-    // silent upgrade fails. nil for non-store apps, or store apps mas couldn't
-    // give an id for.
+    // Mac App Store product id (adamID) from `mas`, when known. Used to deep-link
+    // to the app's store page (macappstore://apps.apple.com/app/id<storeID>).
+    // nil for non-store apps, or store apps mas had no id for.
     var storeID: String? = nil
 
-    // True when a Homebrew cask exists for this app, so the row can offer an
-    // Adopt action (hand it to Homebrew) in place of a dead in-place update.
+    // True when a cask matches, so the row can offer Adopt (hand it to Homebrew).
     var isAdoptable: Bool { suggestedToken != nil }
 
     // True when we have a concrete newer version than what's installed. App Store
@@ -147,12 +129,12 @@ nonisolated struct ParkedAppUpdate: Codable, Sendable, Hashable, Identifiable {
 
 // MARK: - Lightweight version comparison
 //
-// App versions in the wild are messy: "26.084.0504", "1.4.3", "2.0.1 (4521)",
-// build-only strings, etc. We compare the dot-separated numeric components
-// left-to-right, ignoring any non-numeric trailing junk. This is intentionally
-// simple and total (never throws); when two versions aren't cleanly comparable
-// we fall back to a case-insensitive string inequality so a differing version
-// still reads as "an update is available" rather than silently hiding it.
+// Versions in the wild are messy: "26.084.0504", "1.4.3", "2.0.1 (4521)". We
+// compare the dotted numeric components left-to-right and ignore trailing junk.
+// Total (never throws); when a side won't parse we fall back to string
+// inequality, so a differing version still surfaces rather than hiding.
+//
+// This burned me twice (see AppVersion.isNewer) — covered by AppVersionTests.
 nonisolated enum AppVersion {
     // A version split into its MARKETING components (the dotted numbers users
     // think of as the version) and an optional trailing BUILD number. The build
@@ -223,11 +205,9 @@ nonisolated enum AppVersion {
             let bi = i < b.marketing.count ? b.marketing[i] : 0
             if ai != bi { return ai > bi }
         }
-        // Marketing versions are equal. A BUILD number breaks the tie ONLY when
-        // BOTH sides carry one ("2.0.1 (4522)" > "2.0.1 (4521)"); an asymmetric
-        // build suffix ("2.0.1 (4521)" vs "2.0.1") counts as the same version, so
-        // a build-tagged release of an already-installed marketing version doesn't
-        // masquerade as an update.
+        // Marketing equal. A build number breaks the tie only when BOTH sides
+        // have one; an asymmetric suffix ("2.0.1 (4521)" vs "2.0.1") is the same
+        // version — otherwise a build-tagged rebuild masquerades as an update.
         if let ab = a.build, let bb = b.build { return ab > bb }
         return false
     }
