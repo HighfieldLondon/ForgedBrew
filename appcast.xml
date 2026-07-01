@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                <item>
+                        <item>
+            <title>Version 2.4.3</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.3</h2>
+                <p>Mac Store / Other Apps updates are now awareness-only. In-place updating (via topgrade) was silently failing — it could report success without the app actually updating — so ForgedBrew now shows available updates via MAS and you update each Mac/Other app from its own updater, or Mac App Store apps in the App Store. Deeper topgrade integration is planned for a future release. Also in this release: the Homebrew Updates buttons (Update / Update Selected / Update All) now share a consistent, calmer Homebrew-amber colorway; the Maintenance screen's brew-doctor Diagnostics is tidied up — it sits beside the health ring to reduce scrolling, and findings render as clean cards; and an internal automated test suite was added covering the update-detection, security, and version-comparison logic.</p>
+            ]]></description>
+            <pubDate>Wed, 01 Jul 2026 15:24:13 +0000</pubDate>
+            <sparkle:version>243</sparkle:version>
+            <sparkle:shortVersionString>2.4.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.3/ForgedBrew.dmg"
+                sparkle:version="243"
+                sparkle:shortVersionString="2.4.3"
+                length="13040643"
+                type="application/octet-stream"
+                sparkle:edSignature="5BaedrxaEQZ+137MNLwcd/x/fycsq4JyJhV+9C/eE7ojtloMfbyMJBXCFFPPdGsuieYy/8TBQUQH2YyXo/rKCg==" />
+        </item>
+        <item>
             <title>Version 2.4.2</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.2</h2>
