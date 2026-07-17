@@ -356,6 +356,14 @@ private struct GeneralAndUpdatesSettingsTab: View {
                     }
                     Spacer()
                 }
+
+                Divider()
+
+                // The same preference the menu bar popover's Appearance section
+                // edits — both write StartupSettings.menuBarIconStyle, whose
+                // didSet re-renders the live icon, so the two stay in lockstep
+                // with no syncing to do.
+                menuBarIconPicker
             }
 
             // ===== Startup section (within General) =====
@@ -394,7 +402,7 @@ private struct GeneralAndUpdatesSettingsTab: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Show in menu bar")
                             .font(.system(size: 13, weight: .medium))
-                        Text("Add a ForgedBrew icon to the menu bar, with the number of available updates beside it and a menu to open the app or quit. When this is on and ForgedBrew launches at login, it starts quietly in the menu bar without opening the window \u{2014} click the icon and choose \u{201C}Open ForgedBrew\u{201D} to bring it up.")
+                        Text("Add a ForgedBrew icon to the menu bar, badged with the number of available updates. Click it for Homebrew\u{2019}s health, what needs updating, and an Update All \u{2014} or right-click for a quick Open / Refresh / Quit menu. When this is on and ForgedBrew launches at login, it starts quietly in the menu bar without opening the window \u{2014} click the icon and choose \u{201C}Open ForgedBrew\u{201D} to bring it up.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -925,6 +933,70 @@ private struct GeneralAndUpdatesSettingsTab: View {
             .selectionChip(isSelected: isSelected)
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Menu bar icon colour
+
+    // Mirrors the Appearance section in the menu bar popover. Deliberately NOT
+    // disabled when "Show in menu bar" is off — picking a colour before turning
+    // the icon on is a perfectly reasonable order to do things in, so we hint
+    // instead of blocking.
+    private var menuBarIconPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Menu bar icon")
+                .font(.system(size: 13, weight: .medium))
+            Text("The colour of the ForgedBrew mug in your menu bar. Monochrome is drawn as a template image, so macOS matches it to your menu bar automatically and dims it on inactive displays; the fixed colours look the same everywhere. You can also change this from the menu bar icon itself, under Appearance.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                ForEach(MenuBarIconStyle.allCases) { style in
+                    menuBarIconSwatch(style)
+                }
+                Spacer()
+            }
+            .padding(.top, 2)
+
+            if !startup.showInMenuBar {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 10))
+                    Text("Turn on “Show in menu bar” below to see it.")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // Previews the real thing: the actual mug glyph in the actual colour, rather
+    // than an abstract colour chip.
+    private func menuBarIconSwatch(_ style: MenuBarIconStyle) -> some View {
+        let isSelected = startup.menuBarIconStyle == style
+        return Button {
+            startup.menuBarIconStyle = style
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: "mug.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(style.swatch)
+                    .frame(width: 38, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.primary.opacity(isSelected ? 0.10 : 0.04))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2 : 0)
+                    )
+                Text(style.label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(style.label)
     }
 }
 

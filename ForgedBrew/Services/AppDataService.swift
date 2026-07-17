@@ -201,6 +201,35 @@ final class AppDataService {
     // so access needs no extra synchronization.
     private var refreshEverythingTask: Task<Void, Never>?
 
+    // MARK: - Homebrew diagnostics (brew doctor)
+    //
+    // The last `brew doctor` result, cached app-wide so the menu bar popover can
+    // show Homebrew's health the instant it opens.
+    //
+    // Caching matters here more than anywhere else in this file: doctorReport()
+    // shells out to `brew doctor`, which hits the network and is hard-killed at
+    // 90 SECONDS (see BrewCLIService.runBrewAllowingFailure). Re-running that on
+    // every popover open would be indefensible, so the result is computed once
+    // and reused until something asks for a fresh one.
+    //
+    // nil = never checked this session; the UI shows "not checked yet" rather
+    // than implying health we haven't verified.
+    var doctorReport: BrewCLIService.DoctorReport? = nil
+
+    // True while a brew doctor run is in flight, so the UI can show a spinner
+    // instead of a stale verdict.
+    var isRunningDoctor: Bool = false
+
+    // When the cached report was produced. Lets the UI say how old the verdict
+    // is — a 40-minute-old "healthy" is not the same claim as a fresh one.
+    var doctorCheckedAt: Date? = nil
+
+    // The single in-flight doctor run. Same shared-task coalescing as
+    // refreshEverything: a second caller awaits the running check rather than
+    // starting a competing `brew doctor` (they contend on Homebrew's lock) or
+    // dropping the request and reporting on stale data.
+    private var doctorTask: Task<Void, Never>?
+
     // A request, raised from a Mac App / Other Apps row, to take the user to
     // the Adopt flow in Maintenance instead of adopting inline. The row sets
     // this; DetailRouter observes it to switch the sidebar to Maintenance, and
@@ -644,6 +673,104 @@ final class AppDataService {
         refreshEverythingTask = task
         await task.value
     }
+
+    // Runs `brew doctor` and caches the parsed report on this service.
+    //
+    // Deliberately NOT part of refreshEverything(): brew doctor is network-bound
+    // with a 90-second worst case, and refreshEverything runs at launch and on
+    // every background tick. Bolting doctor onto it would make the launch
+    // refresh — and the "Refreshing your data…" banner — hostage to a slow git
+    // fetch. Instead the menu bar calls this once, lazily, and on demand.
+    //
+    // `force` re-runs even when a report is already cached (the popover's
+    // re-check action); without it, an existing report short-circuits.
+    func refreshDoctor(force: Bool = false) async {
+        if !force, doctorReport != nil { return }
+        // Coalesce: await the in-flight run instead of starting a second one.
+        // Two concurrent `brew doctor` invocations just queue on Homebrew's
+        // global lock and take twice as long to tell us the same thing.
+        if let existing = doctorTask {
+            await existing.value
+            return
+        }
+        let task = Task { @MainActor in
+            isRunningDoctor = true
+            defer {
+                isRunningDoctor = false
+                doctorTask = nil
+            }
+            let report = await cli.doctorReport()
+            doctorReport = report
+            doctorCheckedAt = Date()
+        }
+        doctorTask = task
+        await task.value
+    }
+
+    // MARK: - Update All & Clean Up (menu bar)
+
+    // The full sweep the menu bar offers: refresh Homebrew's metadata, upgrade
+    // everything outdated, then purge the download cache. Fire-and-forget like
+    // startInstall — the Task lives on this singleton so it survives the popover
+    // closing mid-run.
+    //
+    // Composed from paths that already exist rather than reimplemented:
+    //
+    //   1. `brew update` (updateBrew) — NOT part of the old Update All, which is
+    //      why that could report "up to date" against stale tap metadata.
+    //   2. refreshInstalled() — brew update can reveal packages that weren't
+    //      outdated a second ago, so re-read before deciding what to upgrade.
+    //   3. startBatchUpgrade(...) — per-package upgrades (each row keeps its own
+    //      live progress) which ALREADY end in one shared deep clean.
+    //
+    // Step 3's cleanup is why there's no explicit purge in that branch:
+    // startBatchUpgrade finishes with cli.cleanup(), and cleanup() is a
+    // back-compat alias for deepCleanup() (`brew cleanup --prune=all -s -v`).
+    // Adding another here would just run the same scrub twice. When nothing is
+    // outdated there's no batch to piggyback on, so that branch purges directly.
+    func startUpdateAllAndCleanUp(sudoPassword: String?) {
+        guard fullMaintenanceTask == nil else { return }
+        let task = Task { @MainActor in
+            defer {
+                isRunningFullMaintenance = false
+                fullMaintenanceTask = nil
+            }
+            isRunningFullMaintenance = true
+
+            fullMaintenanceStatus = "Updating Homebrew…"
+            for await _ in await cli.updateBrew() { }
+
+            fullMaintenanceStatus = "Checking for updates…"
+            await refreshInstalled()
+
+            let outdated = outdatedExcludingParked()
+            if outdated.isEmpty {
+                fullMaintenanceStatus = "Purging cache…"
+                for await _ in await cli.deepCleanup() { }
+                fullMaintenanceStatus = "Cache purged — everything up to date"
+            } else {
+                let n = outdated.count
+                fullMaintenanceStatus = "Updating \(n) package\(n == 1 ? "" : "s")…"
+                // Hands off: the batch owns the upgrades AND the closing purge,
+                // and each row reports its own phase via installProgress. We
+                // don't await it — the popover watches the rows from here.
+                startBatchUpgrade(packages: outdated, sudoPassword: sudoPassword)
+                fullMaintenanceStatus = nil
+            }
+        }
+        fullMaintenanceTask = task
+    }
+
+    // True while the brew update / purge steps of the sweep above are running.
+    // The per-package upgrades in the middle report through installProgress as
+    // usual, so this is only about the bookend steps.
+    var isRunningFullMaintenance: Bool = false
+
+    // Human-readable status for the sweep's current step, or nil when idle /
+    // once it has handed off to the per-package rows.
+    var fullMaintenanceStatus: String? = nil
+
+    private var fullMaintenanceTask: Task<Void, Never>?
 
     // Rescans Mac App Store / other (non-Homebrew) apps for available updates,
     // excluding Homebrew-managed bundles (so brew casks aren't double-counted).

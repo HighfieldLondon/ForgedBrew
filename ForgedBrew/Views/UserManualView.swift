@@ -1401,10 +1401,10 @@ private let settingsSections: [ManualSection] = [
             "This tab controls how ForgedBrew looks, how it starts, and how it handles updates. It has several cards:",
         ],
         bullets: [
-            ManualBullet("Appearance", "choose Light, Dark, or System. This matches the quick light/dark toggle at the bottom of the sidebar."),
+            ManualBullet("Appearance", "choose Light, Dark, or System (this matches the quick light/dark toggle at the bottom of the sidebar), and pick the colour of the menu bar icon \u{2014} Amber, Monochrome, Blue, Green, Red, or Purple."),
             ManualBullet("Load on startup", "open ForgedBrew automatically when you log in to your Mac (macOS may ask you to confirm the login item the first time)."),
             ManualBullet("Keep in Dock", "show the ForgedBrew icon in the Dock all the time, with the number of available updates as a badge (like Mail or Messages). Turn it off to keep the Dock clear \u{2014} opening from the menu bar then shows a Dock icon only while the window is open."),
-            ManualBullet("Show in menu bar", "add a ForgedBrew icon to the menu bar with the update count beside it and a menu to open or quit. When this is on and ForgedBrew launches at login, it starts quietly in the menu bar \u{2014} click the icon and choose \u{201C}Open ForgedBrew\u{201D} to bring up the window."),
+            ManualBullet("Show in menu bar", "add a ForgedBrew icon to the menu bar with the update count beside it. Click it for a popover with Homebrew health, updates, and the icon-colour picker; right-click for a quick Open \u{00B7} Refresh All \u{00B7} Quit menu. When this is on and ForgedBrew launches at login, it starts quietly in the menu bar. See \u{201C}The menu bar icon\u{201D} below for the full tour."),
             ManualBullet("ForgedBrew updates", "keep the app itself current. ForgedBrew also checks automatically in the background; use \u{201C}Check for ForgedBrew Updates\u{2026}\u{201D} to check on demand."),
             ManualBullet("Self-updating apps", "some apps (Office, Chrome, Claude) update themselves, so Homebrew normally leaves them off the list. Turn this on and ForgedBrew will check them too \u{2014} you may see them even when current; updating simply reinstalls the latest."),
         ],
@@ -1418,6 +1418,23 @@ private let settingsSections: [ManualSection] = [
                 ManualMarker(number: 2, x: 0.83, y: 0.42, note: "Toggles for Load on startup, Keep in Dock, Show in menu bar, and Self-updating apps."),
             ]
         )
+    ),
+
+    ManualSection(
+        id: "menu-bar",
+        title: "The menu bar icon",
+        systemImage: "menubar.rectangle",
+        location: "Menu bar (when \u{201C}Show in menu bar\u{201D} is on)",
+        body: [
+            "With \u{201C}Show in menu bar\u{201D} turned on, ForgedBrew adds a small mug icon to your menu bar with the number of available updates beside it. It\u{2019}s a compact control center \u{2014} you can check your Mac\u{2019}s Homebrew health, apply updates, and restyle the icon without opening the main window.",
+            "Click the icon to open a popover with three collapsible sections. Only one is open at a time, so the popover stays tidy even when lots of packages are out of date:",
+        ],
+        bullets: [
+            ManualBullet("Homebrew Health", "a plain-English \u{201C}brew doctor\u{201D} status \u{2014} \u{201C}Homebrew is healthy\u{201D} when all is well, or a short summary of what to look at \u{2014} with a Re-check button."),
+            ManualBullet("Updates", "how many updates are waiting, with Update All & Purge Cache, Refresh All, and per-package Update buttons. If a package needs your administrator password, ForgedBrew asks for it right inside the popover."),
+            ManualBullet("Appearance", "recolour the menu bar icon on the spot \u{2014} Amber (the classic), Monochrome, Blue, Green, Red, or Purple. It\u{2019}s the same setting as Settings \u{25B8} General & Updates \u{25B8} Appearance, so the two always stay in sync."),
+        ],
+        tip: "Right-click the icon (or two-finger / Control-click) for a quick menu with Open ForgedBrew, Refresh All, and Quit \u{2014} handy when you just want to jump straight to the window."
     ),
 
     ManualSection(

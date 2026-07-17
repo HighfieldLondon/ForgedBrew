@@ -28,6 +28,34 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.4
+
+**Expanded menu bar icon features.** The menu-bar icon is now a compact control
+center for Homebrew — check your Mac's health, apply updates, and restyle the
+icon without ever opening the main window.
+
+- **A richer menu bar popover.** Clicking the icon opens a tidy popover with
+  collapsible sections instead of the old three-item menu:
+  - **Homebrew Health** — a live `brew doctor` status ("Homebrew is healthy," or
+    a short summary of what needs a look) with a **Re-check** button.
+  - **Updates** — how many updates are waiting, with **Update All & Purge Cache**,
+    **Refresh All**, and per-package **Update** buttons.
+  - **Appearance** — recolour the menu-bar icon on the spot.
+  Only one section is open at a time, so the popover stays compact even with
+  dozens of outdated packages.
+- **Choose your menu bar icon colour.** Amber (the classic), Monochrome, Blue,
+  Green, Red, or Purple — set it from the popover's Appearance section or from
+  Settings ▸ General & Updates ▸ Appearance. Monochrome is drawn as a template
+  image, so macOS matches it to your menu bar automatically and dims it on
+  inactive displays.
+- **Update straight from the menu bar.** Apply updates without opening the main
+  window; ForgedBrew asks for your password right inside the popover when a
+  package needs it.
+- **Right-click for the quick menu.** A right-click (or two-finger / Control-click)
+  still drops the classic Open ForgedBrew · Refresh All · Quit menu for fast access.
+
+---
+
 ## What's new in 2.4.3
 
 Refinements to the update experience and the Maintenance screen.
@@ -305,8 +333,10 @@ there is intentionally no "Trust All."
 - **Load on startup** — open ForgedBrew automatically when you log in.
 - **Keep in Dock** — show the icon (with an update-count badge) in the Dock, or
   hide it to keep the Dock clear.
-- **Show in menu bar** — add a menu-bar icon with the update count; combined with
-  launch-at-login, ForgedBrew can start quietly in the menu bar.
+- **Show in menu bar** — add a menu-bar icon with the update count. Click it for a
+  popover with Homebrew health, updates (including Update All & Purge Cache), and
+  the icon-colour picker; right-click for a quick Open · Refresh All · Quit menu.
+  Combined with launch-at-login, ForgedBrew can start quietly in the menu bar.
 - **Self-updating apps** — optionally include apps that update themselves (Office,
   Chrome, Claude) in update checks.
 - **App Locations** — choose which folders ForgedBrew scans for installed apps;

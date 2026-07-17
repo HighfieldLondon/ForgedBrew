@@ -2,6 +2,17 @@ import SwiftUI
 import AppKit
 @preconcurrency import CoreSpotlight
 
+/// Scene id for the app's MAIN window (the sidebar + detail split view).
+///
+/// The WindowGroup went without an id for a long time, which quietly made the
+/// main window unrecoverable: a WindowGroup window is DESTROYED by
+/// `performClose` (unlike the reusable `Window`/`Settings` scenes), and with no
+/// id nothing could ask SwiftUI to build another one. "Open ForgedBrew" would
+/// then find no main window, light the Dock, and show nothing. Giving the group
+/// an id is what makes `openWindow(id: MainWindowID)` — and therefore recovery
+/// — possible at all. See StartupSettings.openMainWindow.
+let MainWindowID = "forgedbrew-main"
+
 /// Identifies which sidebar row is selected. Drives the whole detail pane via
 /// `DetailRouter`. Cask categories and the formulae taxonomy are deliberately
 /// modeled as distinct cases (see notes inline) so the two package worlds never
@@ -761,9 +772,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(windowBecameVisible(_:)),
             name: NSWindow.didBecomeMainNotification, object: nil)
-        // Note: window close is handled by windowShouldClose(_:) (we become the
-        // window's delegate), which hides-vs-closes and calls windowDidClose()
-        // itself — so there's no separate willClose observer here.
+        // Note: window close is handled by handleCloseButton(_:), which we
+        // retarget the red X onto (see below) — SwiftUI owns the WindowGroup's
+        // delegate, so a windowShouldClose(_:) delegate hook never fires.
     }
 
     // True for the app's auxiliary child windows (the ⌘, Settings window, the
@@ -773,7 +784,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // guard, closing the Settings window (when it was the key window) was hiding
     // it through the main-window path and, with the menu bar off, quitting the
     // whole app.
-    private func isAuxiliaryWindow(_ window: NSWindow) -> Bool {
+    // Shared with the menu bar layer (StartupSettings/StatusItemTarget), which
+    // needs the same answer when hunting for the real main window — a bare
+    // `canBecomeMain` predicate happily returns Settings or Welcome, and
+    // NSApp.windows order isn't guaranteed.
+    static func isAuxiliaryWindow(_ window: NSWindow) -> Bool {
         let id = window.identifier?.rawValue ?? ""
         if id == WelcomeWindowID || id == UserManualWindowID { return true }
         // SwiftUI's Settings scene window identifies as "com.apple.SwiftUI.Settings".
@@ -782,6 +797,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || window.title == "ForgedBrew User Manual"
             || window.title == "Welcome to ForgedBrew" { return true }
         return false
+    }
+
+    private func isAuxiliaryWindow(_ window: NSWindow) -> Bool {
+        Self.isAuxiliaryWindow(window)
     }
 
     // True for any window Sparkle presents (download/install progress, the update
@@ -944,12 +963,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleCloseButton(_ sender: Any?) {
         MainActor.assumeIsolated {
-            guard let window = NSApp.keyWindow ?? NSApp.mainWindow
+            // Prefer the window whose close button was ACTUALLY clicked. Falling
+            // straight to keyWindow was a coin flip whenever an auxiliary window
+            // was in play — it could act on a different window than the one the
+            // user clicked.
+            guard let window = (sender as? NSView)?.window
+                    ?? NSApp.keyWindow ?? NSApp.mainWindow
                     ?? NSApp.windows.first(where: { $0.canBecomeMain && $0.isVisible }) else { return }
             let s = StartupSettings.shared
             let liveInMenuBar = s.showInMenuBar || s.hasStatusItem || s.isRunningHeadless
+            // Only OTHER MAIN windows count. Auxiliary windows must be excluded:
+            // Welcome auto-opens after every update, and while it was on screen
+            // this check saw it as "another window", took the performClose branch
+            // below, and DESTROYED the main WindowGroup window — after which
+            // "Open ForgedBrew" had nothing to re-show and only lit the Dock.
             let othersOpen = NSApp.windows.contains {
                 $0 !== window && $0.canBecomeMain && $0.isVisible
+                    && !Self.isAuxiliaryWindow($0)
             }
             if liveInMenuBar && !othersOpen {
                 // Hide, don't close: keeps the scene + process alive in the menu
@@ -958,7 +988,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 s.windowDidClose()
             } else {
                 // Normal close (menu bar off, or not the last window).
-                window.performClose(nil)
+                //
+                // close(), NOT performClose(). performClose() simulates a click
+                // on the red X — and we retargeted that button's action to THIS
+                // method (see windowBecameVisible), so performClose() called
+                // straight back into handleCloseButton, which called
+                // performClose() again, until the stack ran out. That's a
+                // guaranteed SIGSEGV in the stack guard page, not a rare race:
+                // any time this branch was reached, the app died. close() tears
+                // the window down directly and cannot re-enter the button
+                // action.
+                window.close()
             }
         }
     }
@@ -968,10 +1008,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // existing window; windowDidBecomeVisible() then restores normal behavior.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         MainActor.assumeIsolated {
-            if !flag, let window = sender.windows.first(where: { $0.canBecomeMain }) {
-                window.makeKeyAndOrderFront(nil)
+            if !flag {
+                // Same recovery path as the menu bar's "Open ForgedBrew": re-show
+                // a hidden main window, or rebuild one if it was destroyed.
+                StartupSettings.shared.showMainWindow()
             }
-            StartupSettings.shared.windowDidBecomeVisible()
         }
         return true
     }
@@ -1089,7 +1130,7 @@ struct ForgedBrewApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: MainWindowID) {
             NavigationSplitView {
                 SidebarView(selection: $sidebarSelection)
                     // Explicit sidebar column width for deterministic split-view
@@ -1149,6 +1190,13 @@ struct ForgedBrewApp: App {
             .environment(appDataService)
             .environment(updater)
             .task {
+                // Hand SwiftUI's openWindow action down to the AppKit layer. The
+                // AppDelegate and the menu bar's StatusItemTarget are plain
+                // NSObjects living outside the SwiftUI environment, so they can't
+                // reach @Environment(\.openWindow) themselves — without this
+                // bridge they can only order EXISTING windows front, which is
+                // useless once the WindowGroup window has been destroyed.
+                StartupSettings.shared.openMainWindow = { openWindow(id: MainWindowID) }
                 // First run / post-update greeting. Skipped on headless login
                 // launches (menu-bar-only start), where no main window is shown;
                 // the user will see Welcome the next time they open the app.
