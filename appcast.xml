@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                        <item>
+                                <item>
+            <title>Version 2.4.4</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.4</h2>
+                <p>Expanded menu bar icon features. Clicking the menu bar icon now opens a popover with collapsible sections — Homebrew Health (brew doctor), Updates (Update All & Purge Cache, Refresh All, and per-package updates), and Appearance — so you can check your Mac's health and update Homebrew without opening the main window. You can also recolour the menu bar icon (Amber, Monochrome, Blue, Green, Red, or Purple), and a right-click still gives the classic Open / Refresh All / Quit menu.</p>
+            ]]></description>
+            <pubDate>Fri, 17 Jul 2026 17:36:01 +0000</pubDate>
+            <sparkle:version>244</sparkle:version>
+            <sparkle:shortVersionString>2.4.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.4/ForgedBrew.dmg"
+                sparkle:version="244"
+                sparkle:shortVersionString="2.4.4"
+                length="13237323"
+                type="application/octet-stream"
+                sparkle:edSignature="s4vni8fThEJf2y2ZdAKJm0hpvaI+tsC97hAGkdRA4Srx+cnWd1jUx7wwIdF8T4cgFcFZoLoU4KhwtjDuwypxDQ==" />
+        </item>
+        <item>
             <title>Version 2.4.3</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.3</h2>
