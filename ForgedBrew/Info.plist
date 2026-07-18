@@ -12,5 +12,16 @@
 	<string>8mZ7FBpPKjEphTljZve8Z1jDetuzvaWsGdJIKcXZDsE=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+
+	<!-- Single-instance guard. ForgedBrew flips its activation policy between
+	     .accessory (menu-bar only) and .regular, which leaves a window during
+	     launch/startup-refresh where LaunchServices doesn't yet see the process
+	     as "running" — so a second Dock click starts a SECOND copy instead of
+	     reactivating the first. This tells LaunchServices to never launch a
+	     second instance; the extra launch is delivered to the existing app as a
+	     reopen event (applicationShouldHandleReopen), which we already handle by
+	     showing the main window. -->
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
 </dict>
 </plist>
