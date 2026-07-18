@@ -28,7 +28,7 @@ struct FullDiskAccessBanner: View {
                 Text(granted ? "Full Disk Access granted" : "Grant Full Disk Access")
                     .font(.system(size: 13, weight: granted ? .medium : .semibold))
 
-                Text(granted ? "Cleanup and cache sizes are accurate." : "ForgedBrew needs Full Disk Access to clean Homebrew's cache and show accurate cleanup numbers.")
+                Text(granted ? "Cleanup and cache sizes are accurate." : "ForgedBrew needs Full Disk Access to clean Homebrew's cache and show accurate cleanup numbers. Turn it on in System Settings, then use Quit & Relaunch \u{2014} macOS only applies the change to a freshly launched app, and in menu-bar mode closing the window isn't enough.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -36,17 +36,27 @@ struct FullDiskAccessBanner: View {
 
             Spacer()
 
-            // Action only appears when access is missing. The button deep-links
+            // Actions only appear when access is missing. First: deep-link
             // straight to the Full Disk Access list (Privacy_AllFiles) in System
-            // Settings so the user lands on the exact toggle, not the root pane.
+            // Settings so the user lands on the exact toggle. Second: a one-click
+            // full restart, because a just-granted FDA only takes effect on a
+            // fresh process and closing a menu-bar app's window doesn't restart it.
             if !granted {
-                Button("Open Privacy Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-                        NSWorkspace.shared.open(url)
+                HStack(spacing: 8) {
+                    Button("Open Privacy Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                            NSWorkspace.shared.open(url)
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Quit & Relaunch") {
+                        StartupSettings.shared.relaunch()
+                    }
+                    .controlSize(.small)
+                    .help("Fully quits ForgedBrew and reopens it so a just-granted Full Disk Access takes effect.")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
         }
         .padding(14)

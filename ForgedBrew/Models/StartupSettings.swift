@@ -213,6 +213,39 @@ final class StartupSettings {
         NSApp.terminate(nil)
     }
 
+    // Fully quits ForgedBrew and relaunches it. macOS applies a just-granted
+    // Full Disk Access only to a freshly-launched process, and in menu-bar mode
+    // closing the window doesn't restart anything (the process lives on), so
+    // "grant FDA then reopen the window" silently fails — the point of exposing
+    // this as a one-click action from the FDA banner.
+    //
+    // A detached helper polls until THIS pid is gone (macOS refuses a second
+    // instance of the same bundle while the first is alive) and only then
+    // reopens the app. The helper is a plain child of a GUI process, which has
+    // no controlling terminal, so it is NOT sent SIGHUP when we exit — it
+    // survives to run `open`. userRequestedQuit lets applicationShouldTerminate
+    // treat this as a real quit rather than a hide-to-menu-bar.
+    func relaunch() {
+        let bundlePath = Bundle.main.bundlePath
+        let pid = ProcessInfo.processInfo.processIdentifier
+        // App bundle paths can't contain a single quote, so single-quoting is safe.
+        let script =
+            "while /bin/kill -0 \(pid) >/dev/null 2>&1; do /bin/sleep 0.1; done; "
+            + "/usr/bin/open '\(bundlePath)'"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", script]
+        do {
+            try task.run()
+        } catch {
+            // If the helper can't start, fall back to a plain quit rather than
+            // leaving the user wedged — they can reopen ForgedBrew manually.
+            NSLog("ForgedBrew relaunch helper failed to start: \(error.localizedDescription)")
+        }
+        userRequestedQuit = true
+        NSApp.terminate(nil)
+    }
+
     // True while a real window is on screen. Drives the temporary-Dock-icon
     // behavior when Keep in Dock is off.
     private var isWindowVisible: Bool = false

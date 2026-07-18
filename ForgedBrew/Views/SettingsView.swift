@@ -684,7 +684,7 @@ private struct GeneralAndUpdatesSettingsTab: View {
                     .font(.system(size: 13, weight: fdaGranted ? .medium : .semibold))
                 Text(fdaGranted
                      ? "macOS is letting ForgedBrew read your library, so cleanup and cache sizes are accurate."
-                     : "ForgedBrew needs Full Disk Access to clean Homebrew\u{2019}s cache and show accurate cleanup numbers. Grant it in System Settings, then reopen ForgedBrew.")
+                     : "ForgedBrew needs Full Disk Access to clean Homebrew\u{2019}s cache and show accurate cleanup numbers. Turn it on in System Settings, then use Quit & Relaunch \u{2014} macOS only applies it to a freshly launched app, and in menu-bar mode closing the window isn\u{2019}t enough.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -693,14 +693,22 @@ private struct GeneralAndUpdatesSettingsTab: View {
             Spacer()
 
             if !fdaGranted {
-                Button("Open Privacy Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-                        NSWorkspace.shared.open(url)
+                HStack(spacing: 8) {
+                    Button("Open Privacy Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                            NSWorkspace.shared.open(url)
+                        }
                     }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .help(Text(verbatim: "Open System Settings \u{25B8} Privacy & Security \u{25B8} Full Disk Access"))
+
+                    Button("Quit & Relaunch") {
+                        StartupSettings.shared.relaunch()
+                    }
+                    .controlSize(.small)
+                    .help(Text(verbatim: "Fully quits ForgedBrew and reopens it so a just-granted Full Disk Access takes effect."))
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .help(Text(verbatim: "Open System Settings \u{25B8} Privacy & Security \u{25B8} Full Disk Access"))
             }
         }
         .padding(10)
