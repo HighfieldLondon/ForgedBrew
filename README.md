@@ -28,6 +28,20 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.5
+
+**Menu bar fixes and polish.** A maintenance release that fixes the menu-bar
+update password prompt and tidies up a few rough edges.
+
+- **The menu-bar password prompt stays put.** Applying an update from the
+  menu-bar popover right after launch could make the password field flash up
+  and vanish before you could type — previously you had to open the main window
+  once to make it work. It now stays open in the popover so you can enter your
+  password straight away.
+- **Various minor fixes and clean-ups** under the hood.
+
+---
+
 ## What's new in 2.4.4
 
 **Expanded menu bar icon features.** The menu-bar icon is now a compact control
