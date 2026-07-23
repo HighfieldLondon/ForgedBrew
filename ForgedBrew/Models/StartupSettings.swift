@@ -519,6 +519,15 @@ final class StartupSettings {
     private func installStatusItemIfNeeded() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Give the item a STABLE, UNIQUE autosave name. Without one, AppKit assigns
+        // the default "Item-0" — the SAME name every app that never sets one gets
+        // (Bitwarden, CleanMyMac, …). macOS 26 (Tahoe)'s Menu Bar manager keys each
+        // item's show/hide state by this name ("NSStatusItem VisibleCC <name>"), so
+        // sharing "Item-0" meant a single System Settings toggle governed several
+        // apps at once: turning the (mislabelled) "claude" item off also hid
+        // ForgedBrew. A unique name gives ForgedBrew its own toggle — and its own
+        // saved position. (Changing it re-homes the icon to a default slot once.)
+        item.autosaveName = "ForgedBrewMenuBarItem"
         if let button = item.button {
             // The icon is a single composed image: a beer-amber mug, plus (when
             // there are updates) a small red capsule badge in the top-right with
@@ -561,6 +570,14 @@ final class StartupSettings {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+        // While the popover is up it OWNS any admin-password prompt: set
+        // menuBarSudoActive so the windowed `.sheet(item:)` presenters stand down.
+        // Otherwise a popover-raised prompt would also fire the (possibly hidden)
+        // main window's sheet, whose window takes key focus, dismisses this
+        // transient popover, and trips popoverDidClose into cancelling the request
+        // — the "prompt flashes then vanishes" bug at launch. popoverDidClose
+        // clears this flag, handing ownership back to the windows.
+        AppDataService.shared.menuBarSudoActive = true
     }
 
     private func makePopover() -> NSPopover {
@@ -866,8 +883,15 @@ extension StatusItemTarget: NSPopoverDelegate {
     // what it is: a cancel.
     func popoverDidClose(_ notification: Notification) {
         let appData = AppDataService.shared
-        if let request = appData.pendingSudoRequest {
+        // Cancel any prompt still parked in the popover BEFORE handing ownership
+        // back to the windows. Read the menu-bar façade: pendingSudoRequest is
+        // suppressed to nil while menuBarSudoActive is set, so it would report no
+        // request here. Cancelling first (which clears it) also means no window
+        // sheet flickers up for the same request as ownership transfers.
+        if let request = appData.pendingSudoRequestForMenuBar {
             appData.provideSudoPassword(nil, for: request)
         }
+        // Popover is gone; the windowed password sheets may present again.
+        appData.menuBarSudoActive = false
     }
 }

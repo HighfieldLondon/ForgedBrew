@@ -67,7 +67,13 @@ struct MenuBarPopoverView: View {
             // stacking under the sections: it's modal in intent (an update is
             // parked waiting on it) and the popover is too small to show both
             // without the field getting lost.
-            if let request = appData.pendingSudoRequest {
+            //
+            // Reads pendingSudoRequestForMenuBar, NOT pendingSudoRequest: while
+            // the popover is open it claims the prompt (menuBarSudoActive), which
+            // makes pendingSudoRequest read nil for the windowed sheets so they
+            // don't fight the popover for key focus. This façade always sees the
+            // live request.
+            if let request = appData.pendingSudoRequestForMenuBar {
                 MenuBarSudoPrompt(
                     request: request,
                     validate: { await appData.validateSudoPassword($0) }

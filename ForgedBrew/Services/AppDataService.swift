@@ -429,9 +429,37 @@ final class AppDataService {
     // here; a view presents the password sheet and calls provideSudoPassword.
     // The pending operation is queued in `queuedSudoOperations` until then.
 
-    // The current outstanding admin-password request, or nil. Views observe this
-    // to present the password sheet.
-    var pendingSudoRequest: SudoRequest? = nil
+    // The current outstanding admin-password request, or nil.
+    //
+    // Two surfaces can present it: the windowed `.sheet(item:)` presenters and
+    // the menu bar popover's inline prompt. They must never present the SAME
+    // request at once. If a popover-raised request also triggered a window's
+    // sheet, that window would take key focus, dismiss the transient popover, and
+    // the popover's `popoverDidClose` would then cancel the request out from under
+    // the user — the "menu bar password prompt flashes and vanishes on launch"
+    // bug, which only hid once a session password was cached (no prompt needed).
+    //
+    // So the live request is stored privately and read through two façades:
+    // `pendingSudoRequest` (what the WINDOWS observe) reads nil while the popover
+    // has claimed the prompt; `pendingSudoRequestForMenuBar` (what the POPOVER
+    // observes) always sees it.
+    private var currentSudoRequest: SudoRequest? = nil
+
+    // Set by the menu bar layer (StartupSettings) while its popover is open, so
+    // the windowed password sheets stand down and let the popover own the prompt.
+    var menuBarSudoActive: Bool = false
+
+    // What the WINDOWED password sheets observe. Suppressed to nil while the menu
+    // bar popover owns the prompt (see currentSudoRequest).
+    var pendingSudoRequest: SudoRequest? {
+        menuBarSudoActive ? nil : currentSudoRequest
+    }
+
+    // What the MENU BAR POPOVER observes — the live request regardless of
+    // ownership, since the popover is the surface actually presenting it.
+    var pendingSudoRequestForMenuBar: SudoRequest? {
+        currentSudoRequest
+    }
 
     // Admin password held for the lifetime of THIS app session ONLY. It lives in
     // memory, is never written to disk or the Keychain, and is wiped when the
@@ -1996,7 +2024,7 @@ final class AppDataService {
             // still on screen, if any, is left for the user to answer or cancel.
             for token in tokens
             where self.installProgress[token]?.phase == .needsPassword
-                && self.pendingSudoRequest?.token != token {
+                && self.currentSudoRequest?.token != token {
                 self.discardOrphanedSudoReprompt(token: token)
             }
             // Safety: clear flags for any tokens that didnt end up pinned
@@ -2126,7 +2154,7 @@ final class AppDataService {
         // Remember which request this token's re-prompt is, so the batch upgrade
         // can later discard it if a newer prompt superseded this one on screen.
         queuedSudoRequestIDsByToken[token] = request.id
-        pendingSudoRequest = request
+        currentSudoRequest = request
     }
 
     // Discards a token's queued sudo re-prompt and clears its placeholder row.
@@ -2150,7 +2178,7 @@ final class AppDataService {
     // upgrade-all continuation resumes with the current session password, which
     // is nil on cancel). On cancel we also clear the placeholder HUD entry.
     func provideSudoPassword(_ password: String?, for request: SudoRequest) {
-        pendingSudoRequest = nil
+        currentSudoRequest = nil
         queuedSudoRequestIDsByToken[request.token] = nil
         let resume = queuedSudoOperations.removeValue(forKey: request.id)
         if let password, !password.isEmpty {
@@ -2279,7 +2307,7 @@ final class AppDataService {
                 queuedSudoOperations[request.id] = { [weak self] in
                     continuation.resume(returning: self?.sessionSudoPassword)
                 }
-                pendingSudoRequest = request
+                currentSudoRequest = request
             }
         } onCancel: { [weak self] in
             // If the task is cancelled before the sheet is presented or dismissed
@@ -2290,8 +2318,8 @@ final class AppDataService {
                 if let op = self.queuedSudoOperations.removeValue(forKey: request.id) {
                     op()
                 }
-                if self.pendingSudoRequest?.id == request.id {
-                    self.pendingSudoRequest = nil
+                if self.currentSudoRequest?.id == request.id {
+                    self.currentSudoRequest = nil
                 }
             }
         }
