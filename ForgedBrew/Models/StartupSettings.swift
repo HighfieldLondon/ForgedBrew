@@ -519,14 +519,21 @@ final class StartupSettings {
     private func installStatusItemIfNeeded() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Give the item a STABLE, UNIQUE autosave name. Without one, AppKit assigns
-        // the default "Item-0" — the SAME name every app that never sets one gets
-        // (Bitwarden, CleanMyMac, …). macOS 26 (Tahoe)'s Menu Bar manager keys each
-        // item's show/hide state by this name ("NSStatusItem VisibleCC <name>"), so
-        // sharing "Item-0" meant a single System Settings toggle governed several
-        // apps at once: turning the (mislabelled) "claude" item off also hid
-        // ForgedBrew. A unique name gives ForgedBrew its own toggle — and its own
-        // saved position. (Changing it re-homes the icon to a default slot once.)
+        // Give the status item a stable, unique autosave name so AppKit persists
+        // its menu-bar POSITION under our own key instead of the shared default
+        // "Item-0". This is purely about the saved slot/order — a minor nicety.
+        //
+        // It does NOT control the System Settings ▸ Menu Bar show/hide toggle.
+        // On macOS 26 (Tahoe) that state lives in Control Center's own store
+        // (group.com.apple.controlcenter → trackedApplications), keyed by the
+        // item's bundle id filed under its "responsible application" — the
+        // process that launched us. If ForgedBrew is launched as a child of
+        // another app (e.g. from a dev tool), Control Center files our item
+        // under THAT app's row; that's how a stray "claude" (com.anthropic.
+        // claude-code) toggle once governed our icon. It's a launch-context
+        // artifact, not something an autosave name can affect: a normally
+        // launched build (Finder/Dock/login-item) is attributed to ForgedBrew
+        // itself and gets its own working toggle.
         item.autosaveName = "ForgedBrewMenuBarItem"
         if let button = item.button {
             // The icon is a single composed image: a beer-amber mug, plus (when
