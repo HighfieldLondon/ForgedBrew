@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                                <item>
+                                        <item>
+            <title>Version 2.4.5</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.5</h2>
+                <p>Fixed the menu-bar update password prompt that could flash and vanish on a cold launch, plus various minor fixes and clean-ups.</p>
+            ]]></description>
+            <pubDate>Thu, 23 Jul 2026 13:18:25 +0000</pubDate>
+            <sparkle:version>245</sparkle:version>
+            <sparkle:shortVersionString>2.4.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.5/ForgedBrew.dmg"
+                sparkle:version="245"
+                sparkle:shortVersionString="2.4.5"
+                length="13245097"
+                type="application/octet-stream"
+                sparkle:edSignature="77OBctzoLBo7T2OiqsEELb24+8Rn0baLKZSyl1xHxYUyTGmPZVUKeriboJa5lBNpcutX5cWLmadjJMxGdVqrDw==" />
+        </item>
+        <item>
             <title>Version 2.4.4</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.4</h2>
