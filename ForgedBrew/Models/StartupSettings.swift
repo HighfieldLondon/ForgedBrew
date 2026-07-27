@@ -379,8 +379,30 @@ final class StartupSettings {
     /// genuinely is.
     func showMainWindow() {
         if let window = mainWindow() {
+            // Activation policy FIRST, key window SECOND. Making the window key
+            // while the app is still .accessory and only THEN flipping to
+            // .regular leaves the window server's key-window state stale: the
+            // window draws as active and the app genuinely is frontmost, but the
+            // next physical mouse-down is spent re-establishing key status
+            // instead of reaching the control under the cursor. That's what made
+            // the red X — and any other first click in the window — need two
+            // clicks whenever Keep in Dock was off: the red X HIDES the window
+            // (see AppDelegate.handleCloseButton), so every re-show came back
+            // through this branch and paid the .accessory -> .regular flip. The
+            // rebuild branch below always had this order right; only the re-show
+            // path had it backwards.
+            if NSApp.activationPolicy() != .regular {
+                NSApp.setActivationPolicy(.regular)
+            }
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             windowDidBecomeVisible()
+            // Re-assert key on the next runloop pass, once AppKit has finished
+            // processing the policy transition, so the window is unambiguously
+            // key before the user's first click lands.
+            Task { @MainActor in
+                window.makeKeyAndOrderFront(nil)
+            }
             return
         }
         // No main window object left. Rebuild it via the scene bridge, and only
