@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                                        <item>
+                                                <item>
+            <title>Version 2.4.6</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.6</h2>
+                <p>Minor bug fixes and clean-up. The red close button now works on the first click when running from the menu bar with the Dock icon off, and opening ForgedBrew while it is already running no longer leaves you with two identical windows.</p>
+            ]]></description>
+            <pubDate>Mon, 27 Jul 2026 15:55:35 +0000</pubDate>
+            <sparkle:version>246</sparkle:version>
+            <sparkle:shortVersionString>2.4.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.6/ForgedBrew.dmg"
+                sparkle:version="246"
+                sparkle:shortVersionString="2.4.6"
+                length="13241903"
+                type="application/octet-stream"
+                sparkle:edSignature="tnSXzd/wjgycmw+AozWnv4Xds9jEVunCGCOcXkM7PysnepKYY8w+PbAzOkvCGD6DGuPSEmSu87UZLu16CDG/Dg==" />
+        </item>
+        <item>
             <title>Version 2.4.5</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.5</h2>
