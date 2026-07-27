@@ -187,6 +187,12 @@ final class StartupSettings {
     // no help once the WindowGroup window has been destroyed.
     var openMainWindow: (() -> Void)?
 
+    // True while showMainWindow() is waiting for SwiftUI to materialize a
+    // REBUILT main window. Serialises that branch — see the long note there for
+    // why a second concurrent rebuild leaves the user with two identical
+    // windows.
+    private var isRebuildingMainWindow = false
+
     // Set by the AppDelegate at launch when this run is a login-item launch and
     // showInMenuBar is on. While true the app is living in the menu bar with no
     // window; closing the (never-shown) window must NOT quit the app.
@@ -414,6 +420,29 @@ final class StartupSettings {
             // so early that SwiftUI is about to show the window itself anyway.
             return
         }
+        // ONE rebuild at a time. `openWindow(id:)` on a WindowGroup mints a
+        // BRAND-NEW window on every call — it never reuses an existing one — and
+        // that window does not show up in NSApp.windows until a later runloop
+        // pass. So two rebuild requests arriving close together would BOTH see
+        // mainWindow() == nil and BOTH call openMainWindow(), leaving two
+        // identical "ForgedBrew" entries in the Window menu. There are two
+        // callers that can race like that: applicationShouldHandleReopen and the
+        // menu bar's "Open ForgedBrew".
+        //
+        // DEFENSIVE ONLY — this is not what caused the duplicate-window bug
+        // reported on 2026-07-27. That was applicationShouldHandleReopen
+        // returning true after we had already rebuilt the window, which let
+        // AppKit run its default reopen on top of ours and mint a second one;
+        // see the note there. This guard was written first, did NOT fix it on
+        // its own (verified: still two windows), and is kept only because the
+        // caller race above is real and cheap to close.
+        //
+        // A second main window is ALWAYS a bug: the app is deliberately
+        // single-window (File ▸ New is removed via CommandGroup(replacing:
+        // .newItem)), so there is nothing legitimate to preserve by allowing a
+        // concurrent rebuild.
+        guard !isRebuildingMainWindow else { return }
+        isRebuildingMainWindow = true
         // .regular first: SwiftUI will not place a new window for an .accessory
         // app the way the user expects, and we're definitely showing one now.
         if NSApp.activationPolicy() != .regular {
@@ -426,8 +455,16 @@ final class StartupSettings {
             // badge, headless exit). If it still didn't appear, do nothing —
             // better a no-op than a lit Dock with no window behind it.
             if let window = mainWindow() {
+                isRebuildingMainWindow = false
                 window.makeKeyAndOrderFront(nil)
                 windowDidBecomeVisible()
+            } else {
+                // Not materialized yet. Hold the guard a little longer so a
+                // burst of reopens can't slip past it and mint duplicates, but
+                // ALWAYS release it — a stuck flag would make "Open ForgedBrew"
+                // permanently dead for the rest of the run.
+                try? await Task.sleep(nanoseconds: 750_000_000)
+                isRebuildingMainWindow = false
             }
         }
     }

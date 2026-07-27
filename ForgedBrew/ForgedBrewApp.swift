@@ -1004,17 +1004,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Clicking the Dock icon (or otherwise reopening) when no window is visible
-    // should bring ForgedBrew's window back. Returning true lets AppKit show the
-    // existing window; windowDidBecomeVisible() then restores normal behavior.
+    // should bring ForgedBrew's window back.
+    //
+    // The return value decides whether AppKit ALSO runs its own default reopen
+    // handling on top of ours. This used to be an unconditional `true`, which
+    // was the duplicate-window bug: with no window on screen we called
+    // showMainWindow() — which rebuilds one via openWindow(id:) — and then told
+    // AppKit to go ahead as well, so SwiftUI's WindowGroup minted a SECOND
+    // window. The user got two identical "ForgedBrew" entries in the Window
+    // menu from a single reopen.
+    //
+    // It became easy to trigger once the single-instance guard (`ccd579f`,
+    // shipped in 2.4.5) started routing every extra launch here as a reopen
+    // instead of letting it start a second process — that fix swapped a
+    // duplicate process for a duplicate window.
+    //
+    // So: when we handled the reopen ourselves, return false to suppress
+    // AppKit's default. Only when windows are already visible (nothing for us
+    // to do) do we hand it back to AppKit.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !flag else { return true }
         MainActor.assumeIsolated {
-            if !flag {
-                // Same recovery path as the menu bar's "Open ForgedBrew": re-show
-                // a hidden main window, or rebuild one if it was destroyed.
-                StartupSettings.shared.showMainWindow()
-            }
+            // Same recovery path as the menu bar's "Open ForgedBrew": re-show
+            // a hidden main window, or rebuild one if it was destroyed.
+            StartupSettings.shared.showMainWindow()
         }
-        return true
+        return false
     }
 
     // ForgedBrew quits when its last window closes UNLESS it's living in the menu
