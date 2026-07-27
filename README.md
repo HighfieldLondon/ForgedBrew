@@ -28,6 +28,21 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.6
+
+**Minor bug fixes and clean-up.** A small maintenance release, mostly about how
+the main window opens and closes.
+
+- **The red close button works on the first click.** If you run ForgedBrew from
+  the menu bar with the Dock icon turned off, closing the window used to take
+  two clicks — the first one did nothing at all. One click now closes it.
+- **No more duplicate windows.** Opening ForgedBrew while it was already running
+  could leave you with two identical windows stacked on top of each other. You
+  now always get the one window.
+- **Various minor fixes and clean-ups** under the hood.
+
+---
+
 ## What's new in 2.4.5
 
 **Menu bar fixes and polish.** A maintenance release that fixes the menu-bar
@@ -70,7 +85,10 @@ icon without ever opening the main window.
 
 ---
 
-## What's new in 2.4.3
+<details>
+<summary><strong>Earlier releases</strong></summary>
+
+### 2.4.3
 
 Refinements to the update experience and the Maintenance screen.
 
@@ -91,7 +109,7 @@ Refinements to the update experience and the Maintenance screen.
 
 ---
 
-## What's new in 2.4.2
+### 2.4.2
 
 A focused follow-up to 2.4.1 that widens the security scan and fixes a cosmetic
 install-date glitch.
@@ -111,7 +129,7 @@ install-date glitch.
 
 ---
 
-## What's new in 2.4.1
+### 2.4.1
 
 Sharper, faster **Trust Management Screening** and security scanning ahead of
 Homebrew's **September 1, 2026** cask-quarantine change — plus a broad round of
@@ -169,7 +187,7 @@ flagged exactly as before.
 
 ---
 
-## What's new in 2.4.0
+### 2.4.0
 
 A round of cleanup, refinement, bug fixes, and improvements:
 
@@ -194,9 +212,6 @@ A round of cleanup, refinement, bug fixes, and improvements:
   no longer retained in the on-disk network cache.
 
 ---
-
-<details>
-<summary><strong>Earlier releases</strong></summary>
 
 ### 2.3.7
 
