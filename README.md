@@ -28,6 +28,28 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.7
+
+**A fix for "ForgedBrew won't open", plus two menu bar improvements.**
+
+- **ForgedBrew opens when you open it.** With the menu bar icon on and the Dock
+  icon off, launching ForgedBrew could start it silently in the menu bar with no
+  window — and clicking its Dock or Finder icon again did nothing until you quit
+  and relaunched. Both causes are fixed: an ordinary launch is no longer mistaken
+  for a login launch, and reopening the app always brings back exactly one window.
+- **Updates from the menu bar are ready to launch.** Update and Update All & Purge
+  Cache in the menu bar popover now also clear the quarantine flag on each updated
+  app — the same thing Maintenance ▸ Remove Quarantine does — so you don't need to
+  open the main window afterwards.
+- **Settings in the menu bar.** A new Settings section in the popover, below
+  Appearance, for the settings that matter when you live in the menu bar:
+  background update checks and how often they run, notifications for new updates,
+  and loading ForgedBrew at login. They're the same settings as in the main
+  window, and "All settings…" opens the full Settings window for everything else.
+- **Various minor fixes and clean-ups** under the hood.
+
+---
+
 ## What's new in 2.4.6
 
 **Minor bug fixes and clean-up.** A small maintenance release, mostly about how
@@ -57,7 +79,10 @@ update password prompt and tidies up a few rough edges.
 
 ---
 
-## What's new in 2.4.4
+<details>
+<summary><strong>Earlier releases</strong></summary>
+
+### 2.4.4
 
 **Expanded menu bar icon features.** The menu-bar icon is now a compact control
 center for Homebrew — check your Mac's health, apply updates, and restyle the
@@ -84,9 +109,6 @@ icon without ever opening the main window.
   still drops the classic Open ForgedBrew · Refresh All · Quit menu for fast access.
 
 ---
-
-<details>
-<summary><strong>Earlier releases</strong></summary>
 
 ### 2.4.3
 
