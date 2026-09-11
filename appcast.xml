@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                                                <item>
+                                                        <item>
+            <title>Version 2.4.7</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.7</h2>
+                <p>Fixes ForgedBrew starting silently in the menu bar with no window on an ordinary launch, and the Dock icon doing nothing until you quit and relaunched. Updates applied from the menu bar now also clear the quarantine flag on the updated app, so it opens straight away. New Settings section in the menu bar popover for background update checks, notifications and load at login, with a link to all settings.</p>
+            ]]></description>
+            <pubDate>Fri, 11 Sep 2026 18:00:13 +0000</pubDate>
+            <sparkle:version>247</sparkle:version>
+            <sparkle:shortVersionString>2.4.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.7/ForgedBrew.dmg"
+                sparkle:version="247"
+                sparkle:shortVersionString="2.4.7"
+                length="13279137"
+                type="application/octet-stream"
+                sparkle:edSignature="QKc/GdUy3hEdQ9rGVND3nmBtIzOMDkmGF/j8GeOaT7ZNMLFLWO+jjdIBATBMQgh1/jDEEXC6FckSL3xJvCTADA==" />
+        </item>
+        <item>
             <title>Version 2.4.6</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.6</h2>
