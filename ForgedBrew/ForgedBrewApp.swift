@@ -1152,6 +1152,11 @@ struct ForgedBrewApp: App {
 
     // Opens the Welcome window programmatically on first run / after an update.
     @Environment(\.openWindow) private var openWindow
+    // Handed to the AppKit layer the same way as openWindow (see the .task
+    // below): the menu-bar popover's "All settings…" needs to raise the
+    // Settings scene, and a nil-targeted `showSettingsWindow:` action from
+    // outside the SwiftUI scene graph does not reliably find a responder.
+    @Environment(\.openSettings) private var openSettings
     // Persisted record of the last app version that showed the Welcome window.
     // Empty = the app has never shown Welcome (i.e. a fresh first install).
     @AppStorage("forgedbrewLastWelcomeVersion") private var lastWelcomeVersion = ""
@@ -1249,6 +1254,7 @@ struct ForgedBrewApp: App {
                 // bridge they can only order EXISTING windows front, which is
                 // useless once the WindowGroup window has been destroyed.
                 StartupSettings.shared.openMainWindow = { openWindow(id: MainWindowID) }
+                StartupSettings.shared.openSettingsWindow = { openSettings() }
                 // First run / post-update greeting. Skipped on headless login
                 // launches (menu-bar-only start), where no main window is shown;
                 // the user will see Welcome the next time they open the app.

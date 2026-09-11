@@ -33,6 +33,9 @@ import AppKit
 struct MenuBarPopoverView: View {
     // Shows the main window and closes the popover.
     let onOpenWindow: () -> Void
+    // Opens the main window with the Settings window on top — the escape hatch
+    // from the popover's Settings section to everything it deliberately omits.
+    let onOpenSettings: () -> Void
     // Quits via StartupSettings.requestQuit, so the menu-bar keep-alive rule in
     // applicationShouldTerminate lets the quit through instead of cancelling it.
     let onQuit: () -> Void
@@ -51,9 +54,15 @@ struct MenuBarPopoverView: View {
     @State private var expanded: PopoverSection? = nil
 
     private enum PopoverSection: String, Identifiable {
-        case diagnostics, updates, appearance
+        case diagnostics, updates, appearance, settings
         var id: String { rawValue }
     }
+
+    // Backs the Settings section's toggles. The same shared @Observable the
+    // main window's Settings tab binds to, so a flip here IS the flip there —
+    // there is no sync step, just one value. (Held as @State exactly the way
+    // SettingsView holds it, so $startup bindings work.)
+    @State private var startup = StartupSettings.shared
 
     private var brewUpdates: [InstalledPackage] { appData.outdatedExcludingParked() }
     private var otherUpdates: [AppUpdate] { appUpdates.visibleUpdates() }
@@ -88,6 +97,7 @@ struct MenuBarPopoverView: View {
                         diagnosticsSection
                         updatesSection
                         appearanceSection
+                        settingsSection
                     }
                     .padding(.vertical, 4)
                 }
@@ -402,6 +412,82 @@ struct MenuBarPopoverView: View {
         }
         .buttonStyle(.plain)
         .help(style.label)
+    }
+
+    // MARK: - Settings section
+    //
+    // The handful of settings that matter when you LIVE in the menu bar —
+    // background checking and its cadence, notifications, login launch — so a
+    // headless user never has to open the main window for them. Deliberately
+    // not a mirror of the Settings window:
+    //   • "Show in menu bar" is excluded: turning it off from inside the
+    //     popover removes the popover you are standing in, and with the Dock
+    //     icon also off that is the user's only surface.
+    //   • "Keep in Dock" is excluded for now: it flips the activation policy,
+    //     which dismisses a transient popover mid-click (the same class of
+    //     problem as the 2.4.5 vanishing password prompt).
+    //   • Everything else lives behind "All settings…".
+
+    private var settingsSection: some View {
+        VStack(spacing: 0) {
+            sectionRow(
+                icon: "gearshape.fill",
+                tint: .secondary,
+                title: "Settings",
+                subtitle: settingsSummary,
+                section: .settings
+            )
+            if expanded == .settings {
+                VStack(alignment: .leading, spacing: 8) {
+                    settingsToggle("Check for updates in the background",
+                                   isOn: $startup.backgroundRefreshEnabled)
+                    if startup.backgroundRefreshEnabled {
+                        HStack(spacing: 8) {
+                            Text("Every")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            Picker("Check every", selection: $startup.backgroundRefreshHours) {
+                                ForEach(StartupSettings.backgroundRefreshChoices, id: \.self) { hours in
+                                    Text("\(hours) h").tag(hours)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .controlSize(.small)
+                        }
+                        .padding(.leading, 2)
+                    }
+                    settingsToggle("Notify me when new updates are found",
+                                   isOn: $startup.notifyOnNewUpdates)
+                    settingsToggle("Load ForgedBrew at login",
+                                   isOn: $startup.launchAtLogin)
+                    Button("All settings…", action: onOpenSettings)
+                        .font(.system(size: 11, weight: .medium))
+                        .buttonStyle(MenuBarTextButtonStyle(tint: ActionColors.website))
+                        .padding(.top, 2)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    // One line of state for the collapsed row, so the user can see the
+    // cadence without opening the section.
+    private var settingsSummary: String {
+        guard startup.backgroundRefreshEnabled else { return "Background checks off" }
+        let cadence = "Checks every \(startup.backgroundRefreshHours) h"
+        return startup.notifyOnNewUpdates ? cadence + " · notifies" : cadence
+    }
+
+    private func settingsToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Text(title)
+                .font(.system(size: 11))
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .tint(Color(red: 0.20, green: 0.55, blue: 0.34))
     }
 
     // MARK: - Section row

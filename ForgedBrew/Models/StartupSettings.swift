@@ -187,6 +187,10 @@ final class StartupSettings {
     // no help once the WindowGroup window has been destroyed.
     var openMainWindow: (() -> Void)?
 
+    // Same bridge for the Settings scene (SwiftUI's openSettings action), used
+    // by the menu-bar popover's "All settings…". Set alongside openMainWindow.
+    var openSettingsWindow: (() -> Void)?
+
     // True while showMainWindow() is waiting for SwiftUI to materialize a
     // REBUILT main window. Serialises that branch — see the long note there for
     // why a second concurrent rebuild leaves the user with two identical
@@ -712,6 +716,26 @@ final class StartupSettings {
             onOpenWindow: { [weak self] in
                 self?.popover?.performClose(nil)
                 Self.statusTarget.openApp()
+            },
+            onOpenSettings: { [weak self] in
+                self?.popover?.performClose(nil)
+                // Main window first — Settings is one of its auxiliary child
+                // windows (AppDelegate.isAuxiliaryWindow), and raising it over
+                // no main window leaves the app with nothing to land on when
+                // Settings closes. Then the Settings scene via the SwiftUI
+                // bridge, after a short beat so the main window is on screen
+                // (and, if it had to be rebuilt, so its .task has set the
+                // bridge). A nil-targeted `showSettingsWindow:` was tried first
+                // and silently found no responder from here; it stays only as
+                // the fallback for the moment before the bridge exists.
+                Self.statusTarget.openApp()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    if let open = StartupSettings.shared.openSettingsWindow {
+                        open()
+                    } else {
+                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    }
+                }
             },
             onQuit: { [weak self] in
                 self?.popover?.performClose(nil)
