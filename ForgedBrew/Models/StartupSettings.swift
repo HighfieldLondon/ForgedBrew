@@ -193,6 +193,28 @@ final class StartupSettings {
     // windows.
     private var isRebuildingMainWindow = false
 
+    // True once a main window has been shown at least once in this process.
+    private(set) var hasAdoptedMainWindow = false
+
+    // When this process started. With hasAdoptedMainWindow, defines the launch
+    // grace window (see isLaunchWindowPending).
+    private let launchDate = Date()
+
+    /// True while it is reasonable to believe SwiftUI's LAUNCH window is still
+    /// on its way: nothing has been adopted yet and launch was only moments ago.
+    /// During that window, building a main window ourselves — or letting
+    /// SwiftUI's reopen do it — puts a second one next to the launch window.
+    ///
+    /// The adoption flag alone is not enough: when SwiftUI's state restoration
+    /// comes back with ZERO windows, nothing is ever adopted, and treating that
+    /// as "still launching" forever is exactly the stranded no-window state.
+    /// So the grace period is bounded. Five seconds comfortably covers a launch
+    /// window on a cold start; after that a missing window is taken at face
+    /// value and rebuilt.
+    var isLaunchWindowPending: Bool {
+        !hasAdoptedMainWindow && Date().timeIntervalSince(launchDate) < 5
+    }
+
     // Set by the AppDelegate at launch when this run is a login-item launch and
     // showInMenuBar is on. While true the app is living in the menu bar with no
     // window; closing the (never-shown) window must NOT quit the app.
@@ -384,63 +406,75 @@ final class StartupSettings {
     /// ask SwiftUI to build a fresh one. Only report the window visible once one
     /// genuinely is.
     func showMainWindow() {
-        if let window = mainWindow() {
-            // Activation policy FIRST, key window SECOND. Making the window key
-            // while the app is still .accessory and only THEN flipping to
-            // .regular leaves the window server's key-window state stale: the
-            // window draws as active and the app genuinely is frontmost, but the
-            // next physical mouse-down is spent re-establishing key status
-            // instead of reaching the control under the cursor. That's what made
-            // the red X — and any other first click in the window — need two
-            // clicks whenever Keep in Dock was off: the red X HIDES the window
-            // (see AppDelegate.handleCloseButton), so every re-show came back
-            // through this branch and paid the .accessory -> .regular flip. The
-            // rebuild branch below always had this order right; only the re-show
-            // path had it backwards.
-            if NSApp.activationPolicy() != .regular {
-                NSApp.setActivationPolicy(.regular)
-            }
-            NSApp.activate(ignoringOtherApps: true)
+        if reshowMainWindowIfAlive() { return }
+        rebuildMainWindow()
+    }
+
+    /// Re-shows an existing main window (visible or hidden). Returns false when
+    /// there is no main window OBJECT left to show — i.e. it was destroyed, not
+    /// hidden — so the caller can decide how to rebuild.
+    ///
+    /// This is the branch the red X always leaves us in: handleCloseButton hides
+    /// the window rather than closing it, so every "Open ForgedBrew" from the
+    /// menu bar and every Dock/Finder reopen lands here first.
+    @discardableResult
+    func reshowMainWindowIfAlive() -> Bool {
+        guard let window = mainWindow() else { return false }
+        // Activation policy FIRST, key window SECOND. Making the window key
+        // while the app is still .accessory and only THEN flipping to
+        // .regular leaves the window server's key-window state stale: the
+        // window draws as active and the app genuinely is frontmost, but the
+        // next physical mouse-down is spent re-establishing key status
+        // instead of reaching the control under the cursor. That's what made
+        // the red X — and any other first click in the window — need two
+        // clicks whenever Keep in Dock was off (fixed in 2.4.6, `4634cd3`).
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        windowDidBecomeVisible()
+        // Re-assert key on the next runloop pass, once AppKit has finished
+        // processing the policy transition, so the window is unambiguously
+        // key before the user's first click lands.
+        Task { @MainActor in
             window.makeKeyAndOrderFront(nil)
-            windowDidBecomeVisible()
-            // Re-assert key on the next runloop pass, once AppKit has finished
-            // processing the policy transition, so the window is unambiguously
-            // key before the user's first click lands.
-            Task { @MainActor in
-                window.makeKeyAndOrderFront(nil)
-            }
-            return
         }
-        // No main window object left. Rebuild it via the scene bridge, and only
-        // then take credit for it — openWindow is async in effect, so we hand
-        // windowDidBecomeVisible() the next runloop pass once AppKit has
-        // actually materialized the window.
+        return true
+    }
+
+    /// Rebuilds a DESTROYED main window through the SwiftUI openWindow bridge.
+    /// Only the menu bar's "Open ForgedBrew" needs this: a Dock/Finder reopen
+    /// must NOT come here — see AppDelegate.applicationShouldHandleReopen, which
+    /// hands that case to SwiftUI's own reopen instead.
+    private func rebuildMainWindow() {
+        // Never rebuild while SwiftUI's LAUNCH window may still be on its way.
+        // The bridge gets set by the root view's .task, which runs BEFORE that
+        // window is registered in NSApp.windows — so for a short stretch of
+        // every launch mainWindow() is nil while the bridge is already live.
+        // A request landing in that stretch used to call openWindow(id:) and
+        // mint a SECOND window right next to the one SwiftUI was about to show
+        // (reproduced 2026-09-11 on the shipped 2.4.6: launch, then a second
+        // launch request 1.5s later -> two identical windows).
+        guard !isLaunchWindowPending else { return }
         guard let openMainWindow else {
-            // The bridge is only nil before the root scene's .task has run — i.e.
-            // so early that SwiftUI is about to show the window itself anyway.
+            // No bridge: the root .task never ran, so SwiftUI never created a
+            // main window in this process (state restoration came back with
+            // none). The bridge cannot help; SwiftUI's own reopen can. Ask
+            // LaunchServices to reopen us — LSMultipleInstancesProhibited turns
+            // that into applicationShouldHandleReopen, which hands it to
+            // SwiftUI. Without this, "Open ForgedBrew" was a silent no-op in
+            // exactly the state where the user most needs it.
+            requestReopenViaLaunchServices()
             return
         }
-        // ONE rebuild at a time. `openWindow(id:)` on a WindowGroup mints a
-        // BRAND-NEW window on every call — it never reuses an existing one — and
-        // that window does not show up in NSApp.windows until a later runloop
-        // pass. So two rebuild requests arriving close together would BOTH see
-        // mainWindow() == nil and BOTH call openMainWindow(), leaving two
-        // identical "ForgedBrew" entries in the Window menu. There are two
-        // callers that can race like that: applicationShouldHandleReopen and the
-        // menu bar's "Open ForgedBrew".
-        //
-        // DEFENSIVE ONLY — this is not what caused the duplicate-window bug
-        // reported on 2026-07-27. That was applicationShouldHandleReopen
-        // returning true after we had already rebuilt the window, which let
-        // AppKit run its default reopen on top of ours and mint a second one;
-        // see the note there. This guard was written first, did NOT fix it on
-        // its own (verified: still two windows), and is kept only because the
-        // caller race above is real and cheap to close.
-        //
+        // ONE rebuild at a time. openWindow(id:) on a WindowGroup mints a
+        // BRAND-NEW window on every call — it never reuses one — and that
+        // window does not show up in NSApp.windows until a later runloop pass,
+        // so two requests arriving close together would both build one.
         // A second main window is ALWAYS a bug: the app is deliberately
         // single-window (File ▸ New is removed via CommandGroup(replacing:
-        // .newItem)), so there is nothing legitimate to preserve by allowing a
-        // concurrent rebuild.
+        // .newItem)).
         guard !isRebuildingMainWindow else { return }
         isRebuildingMainWindow = true
         // .regular first: SwiftUI will not place a new window for an .accessory
@@ -460,13 +494,29 @@ final class StartupSettings {
                 windowDidBecomeVisible()
             } else {
                 // Not materialized yet. Hold the guard a little longer so a
-                // burst of reopens can't slip past it and mint duplicates, but
-                // ALWAYS release it — a stuck flag would make "Open ForgedBrew"
-                // permanently dead for the rest of the run.
+                // burst of requests can't slip past it, but ALWAYS release it —
+                // a stuck flag would make "Open ForgedBrew" permanently dead.
                 try? await Task.sleep(nanoseconds: 750_000_000)
                 isRebuildingMainWindow = false
+                // Still nothing after the wait: the bridge did not deliver.
+                // Fall back to SwiftUI's own reopen rather than leave the user
+                // with a running app and no way to get a window.
+                if mainWindow() == nil {
+                    requestReopenViaLaunchServices()
+                }
             }
         }
+    }
+
+    /// Asks LaunchServices to "open" this very app. Because the bundle sets
+    /// LSMultipleInstancesProhibited, that does not start a second process — it
+    /// is delivered to this one as a reopen (AppDelegate.applicationShouldHandleReopen),
+    /// which in turn lets SwiftUI build a main window with no help from us. The
+    /// last-resort way to conjure a window when the openWindow bridge can't.
+    private func requestReopenViaLaunchServices() {
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config)
     }
 
     /// The app's real main window, if one exists: a window that can become main
@@ -489,6 +539,7 @@ final class StartupSettings {
     func windowDidBecomeVisible() {
         isRunningHeadless = false
         isWindowVisible = true
+        hasAdoptedMainWindow = true
         // Any open window means a Dock icon (.regular), regardless of the Keep
         // in Dock preference — that's the temporary icon when Dock is off.
         if NSApp.activationPolicy() != .regular {

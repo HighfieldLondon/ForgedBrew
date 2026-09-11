@@ -747,10 +747,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defaults.set(true, forKey: "forgedbrewPrefersDarkMode")
         }
         NSWindow.allowsAutomaticWindowTabbing = false
-        // Was this a login-item / automatic launch (vs. the user double-clicking
-        // the app)? macOS reports false here when it launched us automatically.
+        // Was this a login-item launch (vs. the user opening the app)? Decides
+        // whether to start headless in the menu bar.
+        //
+        // This used to read NSApplicationLaunchIsDefaultLaunchKey == false, which
+        // was the wrong signal: macOS reports false there for ANY non-default
+        // launch, and that explicitly includes "the app has saved window state
+        // to restore" — i.e. every ordinary Dock/Finder launch that follows a
+        // normal quit with a window open. Those launches were misread as login
+        // launches and went headless: the window was created and hidden on the
+        // spot, and the user saw the app "not open" (reported 2026-09-11, on a
+        // Mac where ForgedBrew is not even a login item). Quitting the headless
+        // app and relaunching "fixed" it only because a quit with no windows
+        // leaves nothing to restore, so the NEXT launch counted as default.
+        //
+        // The launch Apple event carries the definitive answer: a login-item
+        // launch (SMAppService included) tags its kAEOpenApplication event with
+        // keyAELaunchedAsLogInItem. Nothing else sets that.
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let isAutomaticLaunch =
-            (notification.userInfo?["NSApplicationLaunchIsDefaultLaunchKey"] as? Bool) == false
+            launchEvent?.eventClass == AEEventClass(kCoreEventClass)
+            && launchEvent?.eventID == AEEventID(kAEOpenApplication)
+            && launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue
+                == OSType(keyAELaunchedAsLogInItem)
 
         MainActor.assumeIsolated {
             // Re-apply the user's saved "Keep in Dock" preference on every launch
@@ -1004,32 +1023,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Clicking the Dock icon (or otherwise reopening) when no window is visible
-    // should bring ForgedBrew's window back.
+    // should bring ForgedBrew's window back. The return value decides whether
+    // SwiftUI ALSO runs its own default reopen — which, with no visible window,
+    // creates a fresh WindowGroup window.
     //
-    // The return value decides whether AppKit ALSO runs its own default reopen
-    // handling on top of ours. This used to be an unconditional `true`, which
-    // was the duplicate-window bug: with no window on screen we called
-    // showMainWindow() — which rebuilds one via openWindow(id:) — and then told
-    // AppKit to go ahead as well, so SwiftUI's WindowGroup minted a SECOND
-    // window. The user got two identical "ForgedBrew" entries in the Window
-    // menu from a single reopen.
+    // Two failed attempts at this hook are worth knowing about:
     //
-    // It became easy to trigger once the single-instance guard (`ccd579f`,
-    // shipped in 2.4.5) started routing every extra launch here as a reopen
-    // instead of letting it start a second process — that fix swapped a
-    // duplicate process for a duplicate window.
+    //   • Through 2.4.5 it returned an unconditional `true` AFTER calling
+    //     showMainWindow(). When the window had been destroyed, that rebuilt one
+    //     via openWindow(id:) and then let SwiftUI build another — two windows.
+    //   • 2.4.6 (`6928861`) flipped it to an unconditional `false`. That stopped
+    //     the double-up but broke two other cases: a reopen that lands during
+    //     LAUNCH — the root .task has set the openWindow bridge but SwiftUI's
+    //     launch window isn't in NSApp.windows yet — rebuilt a second window
+    //     next to the one SwiftUI was about to show; and when showMainWindow()
+    //     could not deliver a window at all, `false` also suppressed SwiftUI's
+    //     fallback, stranding the user with a running app and NO window
+    //     (reported 2026-09-11: only quitting and relaunching recovered it).
     //
-    // So: when we handled the reopen ourselves, return false to suppress
-    // AppKit's default. Only when windows are already visible (nothing for us
-    // to do) do we hand it back to AppKit.
+    // So this hook no longer rebuilds anything itself. Three cases:
+    //
+    //   1. A hidden window exists (the red X hides rather than closes, so this
+    //      is the common case): re-show it here — keeping the .accessory ->
+    //      .regular ordering fix from `4634cd3` — and return false so SwiftUI
+    //      doesn't double up.
+    //   2. No window object yet and we are still inside the launch grace
+    //      window: SwiftUI is about to show its own launch window. Do NOTHING
+    //      and return false. Verified 2026-09-11 that returning true here makes
+    //      SwiftUI's reopen add a SECOND window next to the launch one, exactly
+    //      as our bridge used to.
+    //   3. No window object, launch long over: it was destroyed (Cmd+W), or
+    //      SwiftUI restored zero windows at launch and never made one. Return
+    //      true and let SwiftUI's reopen build exactly one. This is what makes
+    //      the stranded state unreachable — it needs no bridge and no window.
+    //
+    // The openWindow bridge is now used only by the menu bar's "Open
+    // ForgedBrew", which has no SwiftUI reopen to fall back on.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !flag else { return true }
-        MainActor.assumeIsolated {
-            // Same recovery path as the menu bar's "Open ForgedBrew": re-show
-            // a hidden main window, or rebuild one if it was destroyed.
-            StartupSettings.shared.showMainWindow()
+        return MainActor.assumeIsolated {
+            let s = StartupSettings.shared
+            if s.reshowMainWindowIfAlive() { return false }        // 1
+            guard !s.isLaunchWindowPending else { return false }   // 2
+            return true                                            // 3
         }
-        return false
     }
 
     // ForgedBrew quits when its last window closes UNLESS it's living in the menu
