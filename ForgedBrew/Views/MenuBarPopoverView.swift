@@ -477,8 +477,11 @@ struct MenuBarPopoverView: View {
     }
 
     // Upgrades one package. Mirrors UpdatesView.update(_:) — the session
-    // password gate comes first and nil (cancel) aborts — the only difference
-    // being that here the prompt it raises is answered by this popover.
+    // password gate comes first and nil (cancel) aborts — with two differences:
+    // the prompt it raises is answered by this popover, and the upgrade also
+    // clears the app's quarantine flag afterwards (stripQuarantine). From the
+    // menu bar there's no Maintenance ▸ Remove Quarantine to fall back on, so
+    // an updated app should be ready to launch the moment the row says Done.
     private func update(_ package: InstalledPackage) {
         Task {
             guard let password = await appData.ensureSessionSudoPassword() else { return }
@@ -486,18 +489,20 @@ struct MenuBarPopoverView: View {
                 token: package.token,
                 isUpgrade: true,
                 isFormula: package.type == .formula,
-                sudoPassword: password
+                sudoPassword: password,
+                stripQuarantine: true
             )
         }
     }
 
     // brew update → upgrade everything outdated → purge the download cache.
     // The service owns the sequencing; we only gate on the password first, the
-    // same as every other privileged action.
+    // same as every other privileged action. Like the single Update above,
+    // every upgraded cask also gets its quarantine flag cleared.
     private func updateAllAndCleanUp() {
         Task {
             guard let password = await appData.ensureSessionSudoPassword() else { return }
-            appData.startUpdateAllAndCleanUp(sudoPassword: password)
+            appData.startUpdateAllAndCleanUp(sudoPassword: password, stripQuarantine: true)
         }
     }
 }

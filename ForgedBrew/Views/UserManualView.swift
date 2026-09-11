@@ -1431,7 +1431,7 @@ private let settingsSections: [ManualSection] = [
         ],
         bullets: [
             ManualBullet("Homebrew Health", "a plain-English \u{201C}brew doctor\u{201D} status \u{2014} \u{201C}Homebrew is healthy\u{201D} when all is well, or a short summary of what to look at \u{2014} with a Re-check button."),
-            ManualBullet("Updates", "how many updates are waiting, with Update All & Purge Cache, Refresh All, and per-package Update buttons. If a package needs your administrator password, ForgedBrew asks for it right inside the popover."),
+            ManualBullet("Updates", "how many updates are waiting, with Update All & Purge Cache, Refresh All, and per-package Update buttons. If a package needs your administrator password, ForgedBrew asks for it right inside the popover. Updates applied from here also clear the quarantine flag on the updated app \u{2014} the same thing Maintenance \u{25B8} Remove Quarantine does \u{2014} so it opens straight away without the \u{201C}are you sure you want to open this?\u{201D} check."),
             ManualBullet("Appearance", "recolour the menu bar icon on the spot \u{2014} Amber (the classic), Monochrome, Blue, Green, Red, or Purple. It\u{2019}s the same setting as Settings \u{25B8} General & Updates \u{25B8} Appearance, so the two always stay in sync."),
         ],
         tip: "Right-click the icon (or two-finger / Control-click) for a quick menu with Open ForgedBrew, Refresh All, and Quit \u{2014} handy when you just want to jump straight to the window."

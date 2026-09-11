@@ -756,7 +756,7 @@ final class AppDataService {
     // back-compat alias for deepCleanup() (`brew cleanup --prune=all -s -v`).
     // Adding another here would just run the same scrub twice. When nothing is
     // outdated there's no batch to piggyback on, so that branch purges directly.
-    func startUpdateAllAndCleanUp(sudoPassword: String?) {
+    func startUpdateAllAndCleanUp(sudoPassword: String?, stripQuarantine: Bool = false) {
         guard fullMaintenanceTask == nil else { return }
         let task = Task { @MainActor in
             defer {
@@ -782,7 +782,10 @@ final class AppDataService {
                 // Hands off: the batch owns the upgrades AND the closing purge,
                 // and each row reports its own phase via installProgress. We
                 // don't await it — the popover watches the rows from here.
-                startBatchUpgrade(packages: outdated, sudoPassword: sudoPassword)
+                startBatchUpgrade(
+                    packages: outdated, sudoPassword: sudoPassword,
+                    stripQuarantine: stripQuarantine
+                )
                 fullMaintenanceStatus = nil
             }
         }
@@ -1763,7 +1766,17 @@ final class AppDataService {
         // the UI gets stuck showing \"Cleaning up…\" on rows whose brew work has
         // actually finished. One cleanup at the end avoids that entirely (and
         // is faster). Single-app updates keep runCleanup = true.
-        runCleanup: Bool = true
+        runCleanup: Bool = true,
+        // When true, a successful CASK install/upgrade also clears the
+        // com.apple.quarantine flag from the app bundle brew just put in place
+        // (the same `xattr -r -d` as Maintenance ▸ Remove Quarantine). Set ONLY
+        // by the menu-bar popover's Update / Update All: from the menu bar the
+        // user has no Maintenance section to reach for, so without this a
+        // menu-bar update left them with an app macOS would then interrogate
+        // (or refuse) on first launch. Main-window installs keep the default
+        // (false) — there the Trust banner / Maintenance let the user decide
+        // per app. Ignored for formulae, which have no bundle to clear.
+        stripQuarantine: Bool = false
     ) {
         guard installTasks[token] == nil else { return }
 
@@ -1898,6 +1911,12 @@ final class AppDataService {
             //    whether the app works, so the user should not be made to wait on
             //    a "Cleaning up…" spinner for it.
             await self.logAndRefresh(token: token, action: isUpgrade ? "upgrade" : "install")
+            // Menu-bar updates: clear the quarantine flag BEFORE the row reads
+            // Done, so "Done" means the app is ready to launch, not merely
+            // poured. Best-effort; a failure is logged and never fails the row.
+            if stripQuarantine && !isFormula {
+                await self.stripQuarantineAfterInstall(token: token)
+            }
             self.finish(token: token, failure: nil)
 
             // 3. Post-install deep clean (per our design outline). Best-effort and
@@ -1959,7 +1978,13 @@ final class AppDataService {
     // upgrade. The shared cleanup briefly shows a "Cleaning up…" phase on the
     // packages just upgraded so the user sees the tidy step happen, then they
     // all settle to Done together.
-    func startBatchUpgrade(packages: [InstalledPackage], sudoPassword: String?) {
+    func startBatchUpgrade(
+        packages: [InstalledPackage],
+        sudoPassword: String?,
+        // Forwarded to every per-app startInstall — see its doc. Menu-bar
+        // Update All passes true; the main window's Update Selected / All don't.
+        stripQuarantine: Bool = false
+    ) {
         guard !packages.isEmpty else { return }
 
         // Register every token as batch-managed BEFORE starting, so when each
@@ -1980,7 +2005,8 @@ final class AppDataService {
                     isUpgrade: true,
                     isFormula: pkg.type == .formula,
                     sudoPassword: sudoPassword,
-                    runCleanup: false
+                    runCleanup: false,
+                    stripQuarantine: stripQuarantine
                 )
             }
 
@@ -2707,6 +2733,26 @@ final class AppDataService {
             // Logging is best-effort; ignore failures.
         }
         await refreshInstalled()
+    }
+
+    // Clears com.apple.quarantine from the app bundle a cask just installed or
+    // upgraded — the menu-bar half of Maintenance ▸ Remove Quarantine (see
+    // `stripQuarantine` on startInstall). Resolves the bundle through the same
+    // installedCaskAppBundles() the Gatekeeper scan uses, so pkg-based casks
+    // with no `app` artifact (Office, …) resolve too. A cask with no bundle on
+    // disk is a silent no-op. Progress is written into the row's log so the
+    // HUD shows it.
+    private func stripQuarantineAfterInstall(token: String) async {
+        let bundles = (try? await cli.installedCaskAppBundles()) ?? []
+        guard let appPath = bundles.first(where: { $0.token == token })?.appPath,
+              FileManager.default.fileExists(atPath: appPath) else { return }
+        let bundleName = (appPath as NSString).lastPathComponent
+        appendLog(token: token, line: "==> Removing quarantine flag from \(bundleName)")
+        if await cli.removeQuarantine(at: appPath) {
+            appendLog(token: token, line: "Quarantine flag cleared — \(bundleName) will open without the first-launch check")
+        } else {
+            appendLog(token: token, line: "Could not clear the quarantine flag; use Maintenance ▸ Remove Quarantine in the main window")
+        }
     }
 
     // Marks an operation finished (or failed), clears its backing Task, and
