@@ -181,6 +181,13 @@ final class AppDataService {
     // yet, so a fast click into a panel never shows a permanently empty list.
     var hasLoadedInstalledOnce: Bool = false
     var lastError: String? = nil
+
+    // True when Homebrew refused to run because the Xcode license hasn't been
+    // accepted (Homebrew's brew.sh gate — re-armed by every major Xcode
+    // update). Drives XcodeLicenseSheet in the main window and a call-out in the
+    // menu-bar popover. Cleared by the next successful brew read or by
+    // acceptXcodeLicense(password:).
+    var xcodeLicenseRequired: Bool = false
     var homebrewVersion: String = ""
     // True when Homebrew is not installed on this Mac. Set at launch from a
     // fast filesystem check (BrewCLIService.isInstalled). Drives the first-run
@@ -494,6 +501,50 @@ final class AppDataService {
     // rather than being cached and silently allowing the operation to proceed.
     func validateSudoPassword(_ password: String) async -> Bool {
         await cli.validateSudoPassword(password)
+    }
+
+    // Records why a brew read failed, in words the UI can show. Until
+    // 2026-09-16 the catch above stored `error.localizedDescription` — for a
+    // BrewCLIError that is a useless "The operation couldn't be completed" —
+    // and nothing displayed it anyway, so a brew that refused to run (Homebrew
+    // 7's Xcode-license gate) presented as an empty Installed list with no
+    // explanation. Now: the license case sets xcodeLicenseRequired (which
+    // raises the sheet with the one-tap fix); everything else lands in
+    // lastError verbatim from brew's stderr, for the banner.
+    private func noteBrewFailure(_ error: Error) {
+        let message: String
+        switch error {
+        case BrewCLIError.processError(let text): message = text
+        case BrewCLIError.executableNotFound:     message = "Homebrew isn't installed."
+        default:                                  message = error.localizedDescription
+        }
+        if BrewCLIService.isXcodeLicenseError(message) {
+            xcodeLicenseRequired = true
+            lastError = "Homebrew can't run until the Xcode license is accepted."
+        } else {
+            lastError = message
+        }
+    }
+
+    // Accepts the Xcode license with the given administrator password, then
+    // re-reads everything so the lists fill in. Returns nil on success or a
+    // message to show inline. On success the password becomes the session
+    // password, so the update the user was probably about to run doesn't ask
+    // for it again.
+    func acceptXcodeLicense(password: String) async -> String? {
+        guard await cli.validateSudoPassword(password) else {
+            return "That password wasn't accepted. Please try again."
+        }
+        let result = await cli.acceptXcodeLicense(sudoPassword: password)
+        guard result.success else {
+            let detail = result.message.isEmpty ? "xcodebuild reported an error." : result.message
+            return "Couldn't accept the license: \(detail)"
+        }
+        sessionSudoPassword = password
+        xcodeLicenseRequired = false
+        lastError = nil
+        Task { await refreshEverything() }
+        return nil
     }
 
     // True while an install/uninstall is running for the given token. Views use
@@ -1460,6 +1511,9 @@ final class AppDataService {
 
             let listOutput = try decoder.decode(BrewInfoOutput.self, from: listData)
             let outdatedOutput = try decoder.decode(BrewOutdatedOutput.self, from: outdatedData)
+            // brew ran and answered: whatever it last complained about is over.
+            lastError = nil
+            xcodeLicenseRequired = false
 
             let outdatedCaskTokens = Set(outdatedOutput.casks.map { $0.token })
             let outdatedFormulaNames = Set(outdatedOutput.formulae.map { $0.name })
@@ -1585,7 +1639,7 @@ final class AppDataService {
             await loadParked()
             await pruneParksForUninstalled()
         } catch {
-            lastError = error.localizedDescription
+            noteBrewFailure(error)
         }
         isLoadingInstalled = false
         // Mark that the Homebrew inventory has loaded at least once so

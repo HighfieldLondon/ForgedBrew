@@ -185,6 +185,39 @@ struct MenuBarPopoverView: View {
             )
             if expanded == .diagnostics {
                 VStack(alignment: .leading, spacing: 6) {
+                    // Homebrew refusing to run outranks every doctor finding —
+                    // nothing else in this popover works until it's fixed. The
+                    // fix needs an admin password, which lives in the main
+                    // window's sheet, so this hands off to Open ForgedBrew.
+                    if appData.xcodeLicenseRequired {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.octagon.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(ActionColors.destructive)
+                                .frame(width: 12)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Homebrew can't run: the Xcode license needs accepting.")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("Open ForgedBrew to fix it", action: onOpenWindow)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .buttonStyle(MenuBarTextButtonStyle(tint: ActionColors.website))
+                            }
+                        }
+                        .padding(.bottom, 4)
+                    } else if let message = appData.lastError {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(ActionColors.update)
+                                .frame(width: 12)
+                            Text("Homebrew reported a problem: \(message)")
+                                .font(.system(size: 11))
+                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.bottom, 4)
+                    }
                     if let report = appData.doctorReport {
                         if report.isClean {
                             Text("brew doctor found nothing to report.")

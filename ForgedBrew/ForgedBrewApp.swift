@@ -1296,6 +1296,27 @@ struct ForgedBrewApp: App {
                     isPresented: Bindable(appDataService).brewMissing
                 )
             }
+            // Second gate: Homebrew IS installed but refuses to run because the
+            // Xcode license hasn't been accepted (re-armed by every major Xcode
+            // update). Set by AppDataService.noteBrewFailure() when a brew read
+            // dies with Homebrew's license message. The sheet accepts it for the
+            // user with their admin password, or shows the Terminal command.
+            .sheet(isPresented: Bindable(appDataService).xcodeLicenseRequired) {
+                XcodeLicenseSheet(
+                    isPresented: Bindable(appDataService).xcodeLicenseRequired
+                )
+                .environment(appDataService)
+            }
+            // Any OTHER brew failure: show brew's own words at the top of the
+            // window instead of leaving the lists silently empty.
+            // Attached AFTER .environment(appDataService) in this chain, so the
+            // service must be re-injected here — an overlay does not inherit
+            // it, and @Environment(AppDataService.self) traps when it's missing.
+            .overlay(alignment: .top) {
+                BrewErrorBanner()
+                    .environment(appDataService)
+            }
+            .animation(.easeInOut(duration: 0.25), value: appDataService.lastError)
             // Non-blocking "Refreshing your data…" indicator. Shown in the
             // bottom-trailing corner while a full app-wide refresh runs (launch
             // or global rescan) so the user knows panels are still filling in,

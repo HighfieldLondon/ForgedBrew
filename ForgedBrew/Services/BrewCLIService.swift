@@ -5,6 +5,21 @@ nonisolated enum BrewCLIError: Error, Sendable {
     case processError(String)
 }
 
+// Without this, `localizedDescription` on a BrewCLIError is Foundation's
+// generic "The operation couldn't be completed. (ForgedBrew.BrewCLIError
+// error 0.)" — which is what ~20 catch sites in AppDataService store into
+// lastError, and what the error banner then showed (2026-09-16). With it, the
+// message IS what brew printed to stderr (see collect()), so the user reads
+// "You have not agreed to the Xcode license…" instead of an error code.
+extension BrewCLIError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .executableNotFound:      return "Homebrew isn't installed."
+        case .processError(let text):  return text
+        }
+    }
+}
+
 // Thread-safe one-shot latch: fire() returns true exactly once. Used so the
 // brew lock is released a single time even though both the process termination
 // handler and the launch-failure catch can call the release closure.
@@ -809,12 +824,20 @@ actor BrewCLIService {
         }
 
         let data = await dataTask
-        // Drain stderr to EOF so the detached reader completes; brew warnings
-        // here are intentionally discarded — only stdout JSON is returned.
-        _ = await errTask
+        // Drain stderr to EOF so the detached reader completes. On SUCCESS the
+        // warnings there are intentionally discarded — only stdout JSON is
+        // returned. On FAILURE stderr is the whole story: brew explains itself
+        // there ("You have not agreed to the Xcode license…", "Error: …"), and
+        // reporting a bare "Exit code 1" instead threw that explanation away —
+        // which is how Homebrew 7's Xcode-license gate showed up in ForgedBrew
+        // as an EMPTY Installed list with no message at all (2026-09-16).
+        let errData = await errTask
 
         guard process.terminationStatus == 0 else {
-            throw BrewCLIError.processError("Exit code \(process.terminationStatus)")
+            let tail = BrewCLIService.stderrTail(errData)
+            throw BrewCLIError.processError(
+                tail.isEmpty ? "Exit code \(process.terminationStatus)" : tail
+            )
         }
 
         guard let output = String(data: data, encoding: .utf8) else {
@@ -2313,6 +2336,91 @@ func brewVersion() async throws -> String {
         } catch {
             return false
         }
+    }
+
+    // The last few meaningful lines of a failed brew run's stderr, joined for
+    // display. Drops blank lines and brew's ANSI colour codes.
+    nonisolated static func stderrTail(_ data: Data, maxLines: Int = 6) -> String {
+        guard let text = String(data: data, encoding: .utf8) else { return "" }
+        let cleaned = text.replacingOccurrences(
+            of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression
+        )
+        let lines = cleaned
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return lines.suffix(maxLines).joined(separator: "\n")
+    }
+
+    // True when a brew failure message is Homebrew's Xcode-license gate. brew.sh
+    // runs `xcrun --find clang` before dispatching ANY command; if that fails
+    // mentioning "license" it dies with "You have not agreed to the Xcode
+    // license. Please resolve this by running: sudo xcodebuild -license accept".
+    // A new Xcode version re-arms the gate, so this recurs on every major Xcode
+    // update — it is not a one-off. Match loosely so wording tweaks don't break it.
+    nonisolated static func isXcodeLicenseError(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("xcode license") || m.contains("xcodebuild -license")
+    }
+
+    // MARK: - Xcode license
+
+    // Outcome of `sudo xcodebuild -license accept`.
+    nonisolated struct XcodeLicenseResult: Sendable {
+        let success: Bool
+        let message: String   // combined output, trimmed; empty on a clean success
+    }
+
+    // Accepts the Xcode license on the user's behalf: `sudo -A xcodebuild
+    // -license accept`, authenticated through the same askpass helper the brew
+    // runs use (see writeAskpassAssets), so no TTY prompt is involved. This is
+    // the one non-brew command ForgedBrew runs with sudo; it exists because
+    // Homebrew refuses to do ANYTHING until the license is accepted, and from
+    // inside the app the alternative was a blank Installed list and a trip to
+    // Terminal. The password file is removed as soon as the run ends.
+    func acceptXcodeLicense(sudoPassword: String) async -> XcodeLicenseResult {
+        guard let askpass = BrewCLIService.writeAskpassAssets(password: sudoPassword) else {
+            return XcodeLicenseResult(success: false, message: "Could not prepare the password helper.")
+        }
+        defer { try? FileManager.default.removeItem(atPath: askpass.passwordFilePath) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        process.arguments = ["-A", "/usr/bin/xcodebuild", "-license", "accept"]
+        var env = ProcessInfo.processInfo.environment
+        env["SUDO_ASKPASS"] = askpass.scriptPath
+        env["FORGEDBREW_ASKPASS_PASSWORD"] = sudoPassword
+        process.environment = env
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let handle = pipe.fileHandleForReading
+        async let output = Task.detached(priority: .utility) {
+            handle.readDataToEndOfFile()
+        }.value
+
+        // Same non-blocking wait as collect(): never waitUntilExit() on the actor.
+        let resumeOnce = OneShot()
+        let launchError = LaunchErrorBox()
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in
+                if resumeOnce.fire() { cont.resume() }
+            }
+            do {
+                try process.run()
+            } catch {
+                launchError.set(error)
+                if resumeOnce.fire() { cont.resume() }
+            }
+        }
+        let data = await output
+        if let err = launchError.value {
+            return XcodeLicenseResult(success: false, message: "Could not run xcodebuild: \(err.localizedDescription)")
+        }
+        let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return XcodeLicenseResult(success: process.terminationStatus == 0, message: text)
     }
 
     // MARK: - Tap trust / untap
