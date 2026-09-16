@@ -28,6 +28,25 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.8
+
+**Homebrew 7 support.** Homebrew 7 refuses to run until the Xcode license has
+been accepted — and that happens again after every major Xcode update. Until
+now that left ForgedBrew showing an empty Installed list with no explanation.
+
+- **ForgedBrew tells you when Homebrew can't run, and fixes it.** If the Xcode
+  license needs accepting, a clear prompt explains why your apps aren't showing
+  and offers **Accept now** — enter your administrator password and ForgedBrew
+  accepts the license and refreshes. Prefer Terminal? The exact command is
+  shown and copyable.
+- **Other Homebrew problems are shown, not hidden.** Whatever Homebrew
+  complained about — a network failure, a broken tap — now appears at the top
+  of the window in Homebrew's own words, instead of a silently empty list.
+- **The menu bar knows too.** The popover's Homebrew Health section flags when
+  Homebrew can't run and points you to the fix.
+
+---
+
 ## What's new in 2.4.7
 
 **A fix for "ForgedBrew won't open", plus two menu bar improvements.**
@@ -65,7 +84,10 @@ the main window opens and closes.
 
 ---
 
-## What's new in 2.4.5
+<details>
+<summary><strong>Earlier releases</strong></summary>
+
+### 2.4.5
 
 **Menu bar fixes and polish.** A maintenance release that fixes the menu-bar
 update password prompt and tidies up a few rough edges.
@@ -78,9 +100,6 @@ update password prompt and tidies up a few rough edges.
 - **Various minor fixes and clean-ups** under the hood.
 
 ---
-
-<details>
-<summary><strong>Earlier releases</strong></summary>
 
 ### 2.4.4
 
@@ -412,7 +431,9 @@ there is intentionally no "Trust All."
 ## Requirements
 
 - macOS (Apple Silicon).
-- [Homebrew](https://brew.sh) — ForgedBrew will guide you if it isn't installed yet.
+- [Homebrew](https://brew.sh), including Homebrew 7 — ForgedBrew will guide you if it
+  isn't installed yet, and will prompt you (with a one-click fix) if Homebrew is waiting
+  on the Xcode license after an Xcode update.
 
 ## Installing
 
