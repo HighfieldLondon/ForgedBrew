@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                                                        <item>
+                                                                <item>
+            <title>Version 2.4.8</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.8</h2>
+                <p>Homebrew 7 support. Homebrew 7 refuses to run until the Xcode license has been accepted, which left ForgedBrew showing an empty Installed list with no explanation. ForgedBrew now tells you when Homebrew cannot run and offers to accept the Xcode license for you with your administrator password, then refreshes. Any other Homebrew problem is shown at the top of the window in Homebrew's own words instead of a silently empty list, and the menu bar popover flags it too.</p>
+            ]]></description>
+            <pubDate>Wed, 16 Sep 2026 15:49:08 +0000</pubDate>
+            <sparkle:version>248</sparkle:version>
+            <sparkle:shortVersionString>2.4.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.8/ForgedBrew.dmg"
+                sparkle:version="248"
+                sparkle:shortVersionString="2.4.8"
+                length="13098291"
+                type="application/octet-stream"
+                sparkle:edSignature="prIFLDbJQ+qK1WhrFAViNAvmhckRaS3HpSv1md84I7xT6WkEmNyztGT+zlYGkP3G8yZzmhQ0+Umz5XMDi028AA==" />
+        </item>
+        <item>
             <title>Version 2.4.7</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.7</h2>
