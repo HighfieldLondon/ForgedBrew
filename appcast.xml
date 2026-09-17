@@ -5,7 +5,25 @@
         <link>https://raw.githubusercontent.com/HighfieldLondon/ForgedBrew/main/appcast.xml</link>
         <description>Most recent updates to ForgedBrew.</description>
         <language>en</language>
-                                                                <item>
+                                                                        <item>
+            <title>Version 2.4.9</title>
+            <description><![CDATA[
+                <h2>ForgedBrew 2.4.9</h2>
+                <p>macOS 27 support. On macOS 27, ForgedBrew reported Full Disk Access as not granted no matter what System Settings said, because macOS 27 moved the data the check relied on. Full Disk Access is now detected correctly on macOS 27 and earlier, so a grant you have already made shows up as granted. If you saw the Full Disk Access needed notice after upgrading, this update is the fix and there is nothing to change in System Settings.</p>
+            ]]></description>
+            <pubDate>Thu, 17 Sep 2026 15:45:41 +0000</pubDate>
+            <sparkle:version>249</sparkle:version>
+            <sparkle:shortVersionString>2.4.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/HighfieldLondon/ForgedBrew/releases/download/v2.4.9/ForgedBrew.dmg"
+                sparkle:version="249"
+                sparkle:shortVersionString="2.4.9"
+                length="13100132"
+                type="application/octet-stream"
+                sparkle:edSignature="Ybeu4imfE0yQp6rG0htMytcIO4UBMRhgeCEvonr7hxv6qlIlLhreT19q/gIdj3WK5MvORnFIdl8+b0bIeFw/Ag==" />
+        </item>
+        <item>
             <title>Version 2.4.8</title>
             <description><![CDATA[
                 <h2>ForgedBrew 2.4.8</h2>
