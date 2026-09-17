@@ -28,6 +28,21 @@ Mac healthy and secure — all without touching the Terminal.
 
 ---
 
+## What's new in 2.4.9
+
+**macOS 27 support.** On macOS 27, ForgedBrew reported Full Disk Access as not
+granted no matter what System Settings said — and turning it off and on again
+made no difference.
+
+- **Full Disk Access is detected correctly on macOS 27.** macOS 27 moved the
+  data ForgedBrew used to check, so the check always failed. It now checks
+  in a way that works on macOS 27 and on earlier versions, so a grant you've
+  already made shows up as granted. If you saw the "Full Disk Access needed"
+  notice after upgrading, updating to this version is the fix — nothing to
+  change in System Settings.
+
+---
+
 ## What's new in 2.4.8
 
 **Homebrew 7 support.** Homebrew 7 refuses to run until the Xcode license has
@@ -69,7 +84,10 @@ now that left ForgedBrew showing an empty Installed list with no explanation.
 
 ---
 
-## What's new in 2.4.6
+<details>
+<summary><strong>Earlier releases</strong></summary>
+
+### 2.4.6
 
 **Minor bug fixes and clean-up.** A small maintenance release, mostly about how
 the main window opens and closes.
@@ -83,9 +101,6 @@ the main window opens and closes.
 - **Various minor fixes and clean-ups** under the hood.
 
 ---
-
-<details>
-<summary><strong>Earlier releases</strong></summary>
 
 ### 2.4.5
 
@@ -430,7 +445,7 @@ there is intentionally no "Trust All."
 
 ## Requirements
 
-- macOS (Apple Silicon).
+- macOS (Apple Silicon), including macOS 27.
 - [Homebrew](https://brew.sh), including Homebrew 7 — ForgedBrew will guide you if it
   isn't installed yet, and will prompt you (with a one-click fix) if Homebrew is waiting
   on the Xcode license after an Xcode update.
